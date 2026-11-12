@@ -1,6 +1,6 @@
-# ⏱️ NTP Stratum Simulation (Interactive TUI with Fault Injection)
+# ⏱️ NTP Stratum Simulation (Enhanced Visual TUI with Chaos Fault Injection)
 
-Simulasi **Network Time Protocol (RFC 5905)** berbasis arsitektur **Hierarki Stratum (Stratum 1, 2, dan 3)** dengan **Interactive Terminal User Interface (TUI)** modern, **Multi-Peer Cross Validation**, dan **Live Fault Injection** untuk tugas kelompok mata kuliah Sistem Terdistribusi (6 node/laptop).
+Simulasi **Network Time Protocol (RFC 5905)** berbasis arsitektur **Hierarki Stratum (Stratum 1, 2, dan 3)** dengan **Interactive Terminal User Interface (TUI)** modern, **Multi-Peer Cross Validation**, **Slew vs Step Dynamic Progress**, dan **Chaos Fault Injection** untuk tugas kelompok mata kuliah Sistem Terdistribusi (6 node/laptop).
 
 ![Language](https://img.shields.io/badge/Language-Python%203.8+-blue.svg)
 ![Interface](https://img.shields.io/badge/Interface-Rich%20TUI%20Dashboard-brightgreen.svg)
@@ -8,32 +8,50 @@ Simulasi **Network Time Protocol (RFC 5905)** berbasis arsitektur **Hierarki Str
 
 ---
 
-## ✨ Fitur Baru & Interaktivitas Live
+## 🌟 Fitur Baru & Peningkatan Visual
 
-### 1. 🎮 Hotkeys Interaktif (Tanpa Perlu Restart Program)
-Cukup tekan tombol di keyboard saat program sedang berjalan di terminal:
-- **`[F]` - Toggle Falseticker (Fault Injection):**
-  - Mengubah node menjadi **server bohong / rusak** yang menyuntikkan distorsi waktu $+60.0$ detik ke semua client yang meminta waktu.
-- **`[M]` - Toggle Sync Mode (Slew vs Step):**
-  - **`STEP`:** Jam langsung melompat instan ke waktu baru.
-  - **`SLEW`:** Jam tidak boleh melompat mendadak! Offset disesuaikan secara gradual dan halus (slewing) untuk menjaga konsistensi urutan log database.
-- **`[D]` - Toggle Hardware Drift:**
-  - Mengaktifkan simulasi ketidaksempurnaan osilator kuarsa fisik (jam otomatis meleset $+5\text{ ms}$ tiap detik) untuk membuktikan pentingnya sinkronisasi berkala.
-- **`[Q]` - Quit:**
-  - Menghentikan node dengan aman dan bersih.
+### 1. 🖥️ Deteksi & Tampilan IP Lokal Otomatis
+- Header sekarang langsung menampilkan **Alamat IP LAN laptop**:
+  `IP: 192.168.1.45:5000 (hostname: bagas-laptop)`
+- Sangat mempermudah koordinasi saat demo di kelas; anggota lain langsung tahu IP mana yang harus dimasukkan ke `--upstream` tanpa perlu buka `ipconfig` atau `ifconfig`.
+
+### 2. 🌊 Perbedaan Nyata `SLEW` vs `STEP` Mode
+- **`STEP` (Instant Jump):** Jam langsung melompat seketika ke waktu baru. Banner menampilkan `⚡ INSTANT STEP APPLIED: Clock shifted +14.2s`.
+- **`SLEW` (Gradual Adaptation):** Jam tidak melompat (menjaga konsistensi sistem file & DB). Jam beradaptasi secara gradual ($\pm 0.40\text{ s/s}$) lengkap dengan **Animated Progress Bar**:
+  `🌊 SLEWING SMOOTHLY: [████████████░░░░░░] 68% (Left: +3.200s / Total: +14.200s)`
+
+### 3. 📉 Random Hardware Drift (Bisa Positif dan Negatif)
+- Tekan **`[D]`**: Osilator kuarsa fisik akan meleset secara acak, bisa **melambat** maupun **mempercepat**:
+  - `📈 DRIFT: +18.4ms/s (FAST)`
+  - `📉 DRIFT: -14.2ms/s (SLOW)`
+
+### 4. 🎲 Falseticker: Manual vs Auto-Chaos (Random Occurrence)
+- **`[F]` - Manual Falseticker:** Menyuntikkan distorsi waktu tetap $+60.0$ detik secara konstan. Layar membelah menampilkan jam asli vs jam palsu yang disiarkan.
+- **`[C]` - Auto Chaos Mode (Random Glitches):** Mengaktifkan gangguan acak intermittant (peluang 35% di tiap request menghasilkan lonjakan skew acak $\pm 30\text{s}$ s.d. $\pm 90\text{s}$).
+
+### 5. 📊 Elemen Visual Tambahan
+- **Visual Stratum Hierarchy Map:**
+  `[ Stratum 1 Master ] ──UDP──> [ STRATUM 2: THIS RELAY ] ──UDP──> [ Stratum 3 Leaf Clients ]`
+- **Offset Sparkline Trend:**
+  Grafik mini Unicode yang memvisualisasikan penurunan offset dari waktu ke waktu: `█▆▅▃▂     `.
+- **Packet Counters:** Menampilkan jumlah total paket request yang terkirim (`TX`) dan diterima (`RX`).
 
 ---
 
-### 2. 🛡️ Multi-Upstream & Falseticker Rejection (Marzullo's Concept)
-Stratum 3 sekarang dapat memantau **beberapa server Stratum 2 sekaligus**:
-- Jika kedua server Stratum 2 mengirimkan waktu yang konsisten $\rightarrow$ Keduanya diklasifikasikan sebagai `● TRUECHIMER` dan sistem memilih server dengan delay terkecil (*Clock Filter*).
-- Jika salah satu Stratum 2 menekan tombol `[F]` (menjadi Falseticker) $\rightarrow$ Client Stratum 3 otomatis mendeteksi outlier tersebut, menandainya sebagai `⚠️ FALSETICKER (DISCARDED)`, dan jam client **tetap aman** karena hanya menyinkronkan ke server yang jujur!
+## 🎮 Hotkeys Interaktif (Tanpa Perlu Tekan Enter)
+
+| Tombol | Fungsi | Keterangan |
+| :---: | :--- | :--- |
+| **`[F]`** | **Toggle Manual Falseticker** | Menyuntikkan kesalahan waktu $+60$ detik secara sengaja. |
+| **`[C]`** | **Toggle Auto-Chaos Mode** | Mengaktifkan gangguan waktu acak sporadis (35% probability). |
+| **`[M]`** | **Toggle Slew vs Step** | Beralih antara lompatan instan (`STEP`) atau penyesuaian halus (`SLEW`). |
+| **`[D]`** | **Toggle Random Drift** | Mengaktifkan/menonaktifkan drift acak ($\pm \text{ms/s}$). |
+| **`[Q]`** | **Quit** | Keluar dari aplikasi dengan bersih. |
 
 ---
 
 ## 🚀 Instalasi & Persiapan
 
-Clone repository ini ke masing-masing laptop:
 ```bash
 git clone https://github.com/jempolbagas/ntp-simulation.git
 cd ntp-simulation
@@ -44,40 +62,12 @@ pip install -r requirements.txt
 
 ## 💻 Panduan Menjalankan
 
-### 1. Uji Coba Mandiri di 1 Laptop (Localhost)
-Buka 4 terminal berbeda untuk menguji skenario Falseticker:
+### Skenario Demo 6 Laptop (Wi-Fi / LAN / Tailscale)
 
-- **Terminal 1 (Stratum 1 - Master Server):**
-  ```bash
-  python3 ntp_node.py --stratum 1 --port 5001
-  ```
-- **Terminal 2 (Stratum 2A - Relay Jujur):**
-  ```bash
-  python3 ntp_node.py --stratum 2 --port 5002 --upstream 127.0.0.1:5001
-  ```
-- **Terminal 3 (Stratum 2B - Calon Falseticker):**
-  ```bash
-  python3 ntp_node.py --stratum 2 --port 5003 --upstream 127.0.0.1:5001
-  ```
-- **Terminal 4 (Stratum 3 - Client dengan Multi-Upstream):**
-  ```bash
-  python3 ntp_node.py --stratum 3 --upstream 127.0.0.1:5002 127.0.0.1:5003
-  ```
-
-> **Skenario Uji Coba:**
-> 1. Perhatikan Terminal 4 menampilkan kedua server sebagai `● TRUECHIMER`.
-> 2. Pindah ke Terminal 3, tekan tombol **`F`**. Terminal 3 akan memunculkan badge merah `⚠️ FALSETICKER MODE ACTIVE`.
-> 3. Lihat Terminal 4! Server 5003 otomatis berubah menjadi `⚠️ FALSETICKER (DISCARDED)`, dan jam Terminal 4 tetap sinkron mengikuti Server 5002.
-> 4. Tekan tombol **`M`** di Terminal 4 untuk melihat jarum jam bergerak gradual (mode SLEW).
-
----
-
-### 2. Skenario Demo 6 Laptop (Wi-Fi / LAN / Tailscale)
-
-Misalkan IP:
-- Laptop 1 (Stratum 1): `192.168.1.10`
-- Laptop 2 (Stratum 2A): `192.168.1.11`
-- Laptop 3 (Stratum 2B): `192.168.1.12`
+Catat IP Laptop 1, 2, dan 3 yang tampil di header masing-masing laptop:
+- Misal IP Laptop 1 (Stratum 1): `192.168.1.10`
+- Misal IP Laptop 2 (Stratum 2A): `192.168.1.11`
+- Misal IP Laptop 3 (Stratum 2B): `192.168.1.12`
 
 Jalankan di masing-masing laptop:
 
@@ -99,4 +89,4 @@ $$\delta = (T_4 - T_1) - (T_3 - T_2) \quad \text{(Round-Trip Delay)}$$
 $$\theta = \frac{(T_2 - T_1) + (T_3 - T_4)}{2} \quad \text{(Clock Offset)}$$
 
 - **Step Mode:** $Waktu_{\text{baru}} = Waktu_{\text{saat\_ini}} + \theta$
-- **Slew Mode:** Penyesuaian bertahap $\pm 0.25\text{ s/s}$ hingga target $\theta$ tercapai.
+- **Slew Mode:** Penyesuaian bertahap $\pm 0.40\text{ s/s}$ hingga target $\theta$ tercapai tanpa merusak timer aplikasi.
