@@ -1,13 +1,15 @@
 import argparse
 import collections
 import json
+import math
+import os
 import random
 import socket
 import sys
 import threading
 import time
 from datetime import datetime
-from typing import Deque, Optional, Tuple
+from typing import Deque, List, Optional, Tuple
 
 try:
     from rich.align import Align
@@ -22,24 +24,118 @@ except ImportError:
     HAS_RICH = False
 
 
+class KeyReader:
+    """Cross-platform non-blocking key reader for terminal interactions."""
+
+    def __init__(self):
+        self.is_windows = os.name == "nt"
+        self.old_settings = None
+        if not self.is_windows and sys.stdin.isatty():
+            try:
+                import termios
+                import tty
+                self.old_settings = termios.tcgetattr(sys.stdin)
+                tty.setcbreak(sys.stdin.fileno())
+            except Exception:
+                self.old_settings = None
+
+    def read_key(self, timeout: float = 0.1) -> Optional[str]:
+        if self.is_windows:
+            import msvcrt
+            start = time.time()
+            while time.time() - start < timeout:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getch()
+                    try:
+                        return ch.decode("utf-8")
+                    except UnicodeDecodeError:
+                        return None
+                time.sleep(0.02)
+            return None
+        else:
+            if not sys.stdin.isatty() or self.old_settings is None:
+                time.sleep(timeout)
+                return None
+            import select
+            rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+            if rlist:
+                return sys.stdin.read(1)
+            return None
+
+    def restore(self) -> None:
+        if self.old_settings is not None and not self.is_windows and sys.stdin.isatty():
+            try:
+                import termios
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+            except Exception:
+                pass
+
+
 class VirtualClock:
-    """Thread-safe virtual clock simulating local time with an adjustable offset."""
+    """Thread-safe virtual clock simulating local time, hardware drift, and slew adjustment."""
 
     def __init__(self, initial_offset: float = 0.0):
         self._offset = initial_offset
+        self._slew_remaining = 0.0
+        self._slew_rate = 0.25  # seconds per second adjustment speed during slewing
+        self._drift_enabled = False
+        self._drift_rate = 0.005  # +5ms per second physical crystal drift
+        self._last_tick = time.time()
         self._lock = threading.Lock()
 
     def now(self) -> float:
         with self._lock:
             return time.time() + self._offset
 
-    def adjust(self, delta: float) -> None:
+    def step(self, delta: float) -> None:
+        """Instantaneous clock adjustment."""
         with self._lock:
             self._offset += delta
+            self._slew_remaining = 0.0
+
+    def start_slew(self, delta: float) -> None:
+        """Gradual clock adjustment (slewing) without discontinuous jumps."""
+        with self._lock:
+            self._slew_remaining += delta
+
+    def tick(self) -> None:
+        """Called periodically by background thread to apply drift and slewing."""
+        with self._lock:
+            now_real = time.time()
+            dt = now_real - self._last_tick
+            self._last_tick = now_real
+
+            # Apply simulated hardware drift if active
+            if self._drift_enabled:
+                self._offset += self._drift_rate * dt
+
+            # Apply gradual slewing
+            if self._slew_remaining != 0.0:
+                max_step = self._slew_rate * dt
+                if abs(self._slew_remaining) <= max_step:
+                    self._offset += self._slew_remaining
+                    self._slew_remaining = 0.0
+                else:
+                    step = math.copysign(max_step, self._slew_remaining)
+                    self._offset += step
+                    self._slew_remaining -= step
 
     def get_offset(self) -> float:
         with self._lock:
             return self._offset
+
+    def get_slew_remaining(self) -> float:
+        with self._lock:
+            return self._slew_remaining
+
+    def is_drift_active(self) -> bool:
+        with self._lock:
+            return self._drift_enabled
+
+    def toggle_drift(self) -> bool:
+        with self._lock:
+            self._drift_enabled = not self._drift_enabled
+            return self._drift_enabled
 
     @staticmethod
     def format_ts(ts: float) -> str:
@@ -47,15 +143,21 @@ class VirtualClock:
 
 
 class SharedState:
-    """Thread-safe data store for UI rendering."""
+    """Thread-safe data store for UI rendering and runtime toggles."""
 
-    def __init__(self, stratum: int, port: int, upstream: Optional[Tuple[str, int]]):
+    def __init__(self, stratum: int, port: int, upstreams: List[Tuple[str, int]]):
         self.stratum = stratum
         self.port = port
-        self.upstream = upstream
+        self.upstreams = upstreams
         self.lock = threading.Lock()
 
-        # Telemetry
+        # Runtime interactive toggles
+        self.falseticker_mode: bool = False
+        self.falseticker_skew: float = 60.0  # +60 seconds injected false offset
+        self.sync_mode: str = "STEP"  # "STEP" or "SLEW"
+
+        # Telemetry & Multi-Peer State
+        self.peer_reports: dict = {}
         self.last_sync_time: Optional[float] = None
         self.t1: Optional[float] = None
         self.t2: Optional[float] = None
@@ -63,8 +165,9 @@ class SharedState:
         self.t4: Optional[float] = None
         self.last_delay: Optional[float] = None
         self.last_theta: Optional[float] = None
-        self.upstream_stratum: Optional[int] = None
+        self.selected_peer: Optional[str] = None
         self.sync_count: int = 0
+        self.prev_steady_offset: Optional[float] = None
 
         # Server stats
         self.server_req_count: int = 0
@@ -72,6 +175,16 @@ class SharedState:
 
         # History
         self.sync_history: Deque[dict] = collections.deque(maxlen=6)
+
+    def toggle_falseticker(self) -> bool:
+        with self.lock:
+            self.falseticker_mode = not self.falseticker_mode
+            return self.falseticker_mode
+
+    def toggle_sync_mode(self) -> str:
+        with self.lock:
+            self.sync_mode = "SLEW" if self.sync_mode == "STEP" else "STEP"
+            return self.sync_mode
 
     def record_server_request(self, client_addr: str, t2: float, t3: float) -> None:
         with self.lock:
@@ -83,6 +196,11 @@ class SharedState:
                 "t3": t3,
             })
 
+    def update_peer_evaluations(self, reports: dict, chosen_peer: Optional[str]) -> None:
+        with self.lock:
+            self.peer_reports = reports
+            self.selected_peer = chosen_peer
+
     def record_sync(
         self,
         t1: float,
@@ -91,7 +209,7 @@ class SharedState:
         t4: float,
         delay: float,
         theta: float,
-        srv_stratum: any,
+        peer_name: str,
         before_ts: float,
         after_ts: float,
     ) -> None:
@@ -103,17 +221,26 @@ class SharedState:
             self.t4 = t4
             self.last_delay = delay
             self.last_theta = theta
-            self.upstream_stratum = srv_stratum
+            self.selected_peer = peer_name
             self.sync_count += 1
+            self.prev_steady_offset = theta
 
             self.sync_history.appendleft({
                 "time": time.time(),
+                "peer": peer_name,
                 "delay_ms": delay * 1000.0,
                 "theta_s": theta,
-                "theta_ms": theta * 1000.0,
+                "mode": self.sync_mode,
                 "before": before_ts,
                 "after": after_ts,
             })
+
+
+def clock_tick_worker(clock: VirtualClock, stop_event: threading.Event) -> None:
+    """Worker loop that drives gradual slewing and continuous drift simulation."""
+    while not stop_event.is_set():
+        clock.tick()
+        time.sleep(0.05)
 
 
 def run_server(clock: VirtualClock, state: SharedState, stop_event: threading.Event) -> None:
@@ -140,11 +267,22 @@ def run_server(clock: VirtualClock, state: SharedState, stop_event: threading.Ev
                 continue
 
             t3 = clock.now()
+
+            # FALSETICKER INJECTION: If toggle is active, corrupt the server timestamps
+            with state.lock:
+                is_faulty = state.falseticker_mode
+                skew = state.falseticker_skew
+
+            if is_faulty:
+                t2 += skew
+                t3 += skew
+
             response = json.dumps({
                 "t1": t1,
                 "t2": t2,
                 "t3": t3,
                 "server_stratum": state.stratum,
+                "is_falseticker": is_faulty,
             }).encode("utf-8")
 
             sock.sendto(response, addr)
@@ -160,61 +298,141 @@ def run_client(
     interval: float,
     stop_event: threading.Event,
 ) -> None:
-    """UDP NTP client polling upstream server and applying offset correction."""
-    if not state.upstream:
+    """UDP NTP client with multi-peer polling and Falseticker/Outlier rejection."""
+    if not state.upstreams:
         return
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2.0)
-    up_host, up_port = state.upstream
+    sock.settimeout(1.5)
 
     try:
         while not stop_event.is_set():
-            t1 = clock.now()
-            request = json.dumps({"t1": t1}).encode("utf-8")
+            peer_samples = {}
 
-            try:
-                sock.sendto(request, (up_host, up_port))
-                data, _ = sock.recvfrom(1024)
-                t4 = clock.now()
+            # 1. Poll all upstream peers
+            for host, port in state.upstreams:
+                peer_key = f"{host}:{port}"
+                t1 = clock.now()
+                request = json.dumps({"t1": t1}).encode("utf-8")
 
-                resp = json.loads(data.decode("utf-8"))
-                t2 = float(resp["t2"])
-                t3 = float(resp["t3"])
-                srv_stratum = resp.get("server_stratum", "?")
+                try:
+                    sock.sendto(request, (host, port))
+                    data, _ = sock.recvfrom(1024)
+                    t4 = clock.now()
 
-                delay = (t4 - t1) - (t3 - t2)
-                theta = ((t2 - t1) + (t3 - t4)) / 2.0
+                    resp = json.loads(data.decode("utf-8"))
+                    t2 = float(resp["t2"])
+                    t3 = float(resp["t3"])
+                    srv_stratum = resp.get("server_stratum", "?")
 
+                    delay = (t4 - t1) - (t3 - t2)
+                    theta = ((t2 - t1) + (t3 - t4)) / 2.0
+
+                    peer_samples[peer_key] = {
+                        "stratum": srv_stratum,
+                        "delay": delay,
+                        "theta": theta,
+                        "t1": t1,
+                        "t2": t2,
+                        "t3": t3,
+                        "t4": t4,
+                        "status": "RESPONDED",
+                    }
+                except socket.timeout:
+                    peer_samples[peer_key] = {"status": "TIMEOUT", "delay": 0.0, "theta": 0.0, "stratum": "?"}
+                except Exception as exc:
+                    peer_samples[peer_key] = {"status": f"ERROR: {exc}", "delay": 0.0, "theta": 0.0, "stratum": "?"}
+
+            # 2. Evaluate Peers (Falseticker vs Truechimer Detection)
+            responded_peers = {k: v for k, v in peer_samples.items() if v["status"] == "RESPONDED"}
+            chosen_peer = None
+
+            if len(responded_peers) == 1:
+                # Single peer available: no cross-validation possible
+                p_key = list(responded_peers.keys())[0]
+                responded_peers[p_key]["classification"] = "TRUECHIMER (Single)"
+                responded_peers[p_key]["action"] = "SELECTED"
+                chosen_peer = p_key
+
+            elif len(responded_peers) >= 2:
+                # Multi-peer cross check: detect outliers (discrepancy > 5.0 seconds)
+                items = list(responded_peers.items())
+                thetas = [v["theta"] for _, v in items]
+
+                max_diff = max(thetas) - min(thetas)
+                if max_diff > 5.0:
+                    # Disagreement detected! Use consensus/past steady offset to isolate the liar
+                    with state.lock:
+                        baseline = state.prev_steady_offset
+
+                    for p_key, data in items:
+                        # If baseline is known, compare against past steady offset; else use median
+                        ref = baseline if baseline is not None else (sum(thetas) / len(thetas))
+                        if abs(data["theta"] - ref) > 10.0:
+                            data["classification"] = "⚠️ FALSETICKER"
+                            data["action"] = "DISCARDED (Skew Outlier)"
+                        else:
+                            data["classification"] = "● TRUECHIMER"
+                            data["action"] = "CANDIDATE"
+
+                    # Pick candidate with minimum round-trip delay
+                    truechimers = [k for k, v in items if v.get("classification") == "● TRUECHIMER"]
+                    if truechimers:
+                        chosen_peer = min(truechimers, key=lambda k: responded_peers[k]["delay"])
+                        responded_peers[chosen_peer]["action"] = "SELECTED FOR SYNC"
+                    else:
+                        # Fallback if baseline was skewed
+                        chosen_peer = min(responded_peers.keys(), key=lambda k: responded_peers[k]["delay"])
+                        responded_peers[chosen_peer]["action"] = "FALLBACK"
+                else:
+                    # All peers agree within tolerance -> all Truechimers
+                    for _, data in items:
+                        data["classification"] = "● TRUECHIMER"
+                        data["action"] = "CANDIDATE"
+                    # Clock Filter: pick lowest delay
+                    chosen_peer = min(responded_peers.keys(), key=lambda k: responded_peers[k]["delay"])
+                    responded_peers[chosen_peer]["action"] = "SELECTED (Lowest Delay)"
+
+            state.update_peer_evaluations(peer_samples, chosen_peer)
+
+            # 3. Apply clock adjustment based on chosen Truechimer
+            if chosen_peer and chosen_peer in responded_peers:
+                p_data = responded_peers[chosen_peer]
+                theta_val = p_data["theta"]
                 before_ts = clock.now()
-                clock.adjust(theta)
+
+                with state.lock:
+                    mode = state.sync_mode
+
+                if mode == "STEP":
+                    clock.step(theta_val)
+                else:
+                    clock.start_slew(theta_val)
+
                 after_ts = clock.now()
 
                 state.record_sync(
-                    t1=t1,
-                    t2=t2,
-                    t3=t3,
-                    t4=t4,
-                    delay=delay,
-                    theta=theta,
-                    srv_stratum=srv_stratum,
+                    t1=p_data["t1"],
+                    t2=p_data["t2"],
+                    t3=p_data["t3"],
+                    t4=p_data["t4"],
+                    delay=p_data["delay"],
+                    theta=theta_val,
+                    peer_name=chosen_peer,
                     before_ts=before_ts,
                     after_ts=after_ts,
                 )
-            except (socket.timeout, OSError, ValueError, KeyError):
-                pass
 
             stop_event.wait(interval)
     finally:
         sock.close()
 
 
-def render_offset_gauge(offset: float, width: int = 42) -> Text:
+def render_offset_gauge(offset: float, width: int = 40) -> Text:
     """Render a visual ASCII/Unicode meter showing offset deviation."""
     abs_val = abs(offset)
     gauge = Text()
 
-    # Determine dynamic scale
     if abs_val > 1.0:
         max_bound = 30.0
         label_l, label_r = "-30s", "+30s"
@@ -227,7 +445,6 @@ def render_offset_gauge(offset: float, width: int = 42) -> Text:
 
     half_w = width // 2
     clamped_offset = max(-max_bound, min(max_bound, offset))
-    # Normalized position: -half_w to +half_w
     pos = int((clamped_offset / max_bound) * half_w)
 
     bar_chars = []
@@ -241,7 +458,6 @@ def render_offset_gauge(offset: float, width: int = 42) -> Text:
 
     gauge_str = "".join(bar_chars)
 
-    # Color coding based on error threshold
     if abs_val < 0.005:
         status_color = "bold green"
         desc = "PERFECT (in sync < 5ms)"
@@ -253,7 +469,7 @@ def render_offset_gauge(offset: float, width: int = 42) -> Text:
         desc = "MODERATE DRIFT"
     else:
         status_color = "bold red"
-        desc = "HIGH DRIFT / UNSYNCED"
+        desc = "HIGH SKEW / UNSYNCED"
 
     gauge.append(f"{label_l:>6} [")
     gauge.append(gauge_str, style=status_color)
@@ -263,7 +479,7 @@ def render_offset_gauge(offset: float, width: int = 42) -> Text:
 
 
 def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
-    """Build modern Rich TUI layout for the NTP node."""
+    """Build modern Rich TUI layout for the NTP node with live toggles."""
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=4),
@@ -275,33 +491,38 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
     now_os = time.time()
     now_virtual = clock.now()
     current_offset = clock.get_offset()
+    slew_rem = clock.get_slew_remaining()
+    drift_on = clock.is_drift_active()
+
+    with state.lock:
+        is_falseticker = state.falseticker_mode
+        sync_mode = state.sync_mode
 
     # 1. HEADER SECTION
     stratum_badges = {
-        1: ("[bold black on bright_yellow] STRATUM 1 [/] [bold bright_yellow]ROOT MASTER REFERENCE[/]", "cyan"),
-        2: ("[bold white on dodger_blue1] STRATUM 2 [/] [bold dodger_blue1]SECONDARY RELAY NODE[/]", "dodger_blue1"),
-        3: ("[bold white on dark_green] STRATUM 3 [/] [bold dark_green]LEAF CLIENT NODE[/]", "green"),
+        1: ("[bold black on bright_yellow] STRATUM 1 [/] [bold bright_yellow]ROOT MASTER[/]", "cyan"),
+        2: ("[bold white on dodger_blue1] STRATUM 2 [/] [bold dodger_blue1]SECONDARY RELAY[/]", "dodger_blue1"),
+        3: ("[bold white on dark_green] STRATUM 3 [/] [bold dark_green]LEAF CLIENT[/]", "green"),
     }
     badge_title, border_color = stratum_badges.get(state.stratum, ("[UNKNOWN]", "white"))
 
-    if state.stratum == 1:
-        sync_badge = "[bold green]● MASTER CLOCK SOURCE[/bold green]"
-    elif abs(current_offset) < 0.005 and state.sync_count > 0:
-        sync_badge = f"[bold green]● SYNCHRONIZED ({state.sync_count} syncs)[/bold green]"
+    # Status indicators
+    if is_falseticker:
+        fault_badge = "[bold white on red] ⚠️ FALSETICKER MODE ACTIVE (+60s FAULT INJECTED) [/bold white on red]"
     else:
-        sync_badge = f"[bold yellow]○ CONVERGING (Syncing... {state.sync_count})[/bold yellow]"
+        fault_badge = "[bold green]● HONEST TIME SERVER[/bold green]" if state.stratum in (1, 2) else "[dim]Client Node[/dim]"
 
-    up_info = f"Upstream: [bold]{state.upstream[0]}:{state.upstream[1]}[/bold]" if state.upstream else "Upstream: [italic]None (Root Authority)[/italic]"
-    srv_info = f"Server: [bold]0.0.0.0:{state.port}[/bold]" if state.stratum in (1, 2) else "Server: [italic]Disabled (Client-only)[/italic]"
+    mode_badge = f"[bold white on dark_cyan] MODE: {sync_mode} [/bold white on dark_cyan]"
+    drift_badge = "[bold yellow]● DRIFT (+5ms/s)[/bold yellow]" if drift_on else "[dim]DRIFT: OFF[/dim]"
 
     header_table = Table.grid(expand=True)
     header_table.add_column(justify="left", ratio=3)
     header_table.add_column(justify="right", ratio=2)
     header_table.add_row(
-        Text.from_markup(f"{badge_title}  |  {up_info}  |  {srv_info}"),
-        Text.from_markup(sync_badge),
+        Text.from_markup(f"{badge_title}  |  {fault_badge}"),
+        Text.from_markup(f"{mode_badge}  {drift_badge}"),
     )
-    layout["header"].update(Panel(header_table, border_style=border_color, title="[bold]Network Time Protocol Simulation[/bold]"))
+    layout["header"].update(Panel(header_table, border_style=border_color, title="[bold]Network Time Protocol Node[/bold]"))
 
     # 2. CLOCKS & DRIFT SECTION
     clocks_table = Table.grid(expand=True)
@@ -312,9 +533,12 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
     offset_color = "bold green" if abs(current_offset) < 0.005 else ("yellow" if abs(current_offset) < 1.0 else "bold red")
     offset_text = f"{current_offset:+.6f} s ({current_offset * 1000:+.2f} ms)"
 
+    if abs(slew_rem) > 0.001:
+        offset_text += f"\n[bold cyan]Slewing left: {slew_rem:+.3f}s[/bold cyan]"
+
     clocks_table.add_row(
         Panel(
-            Align.center(f"[bold cyan]{VirtualClock.format_ts(now_os)}[/bold cyan]\n[dim]OS System Clock[/dim]"),
+            Align.center(f"[bold cyan]{VirtualClock.format_ts(now_os)}[/bold cyan]\n[dim]OS Hardware Time[/dim]"),
             title="[dim]Host Hardware[/dim]",
             border_style="cyan",
         ),
@@ -324,22 +548,19 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
             border_style=border_color,
         ),
         Panel(
-            Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n[dim]Δ Virtual vs Host[/dim]"),
-            title="[bold]Current Offset[/bold]",
+            Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n[dim]Offset (Virtual vs Host)[/dim]"),
+            title="[bold]Clock Deviation[/bold]",
             border_style=offset_color,
         ),
     )
 
     gauge_text = render_offset_gauge(current_offset)
-    clock_box = Group(
-        clocks_table,
-        Align.center(gauge_text),
-    )
+    clock_box = Group(clocks_table, Align.center(gauge_text))
     layout["clocks"].update(Panel(clock_box, border_style="dim", title="Clock Telemetry"))
 
-    # 3. MAIN BODY SECTION (Telemetry + History/Server Activity)
+    # 3. MAIN BODY SECTION
     if state.stratum == 1:
-        # Stratum 1: Server requests table
+        # Stratum 1: Inbound sync monitor
         srv_table = Table(title="Recent Inbound Client Synchronizations", expand=True, border_style="dim")
         srv_table.add_column("Timestamp", style="cyan", no_wrap=True)
         srv_table.add_column("Client IP:Port", style="bold white")
@@ -357,67 +578,98 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
 
         status_text = Text.from_markup(
             f"\n[bold]Total Served Sync Requests:[/] [bright_yellow]{state.server_req_count}[/bright_yellow]\n"
-            f"[dim]Operating as the root clock master. No upstream polling active.[/dim]"
+            f"[dim]Operating as root clock source. Use [bold white][F][/bold white] to toggle simulated falseticker error.[/dim]"
         )
         layout["main"].update(Panel(Group(srv_table, status_text), border_style="bright_yellow", title="Master Server Engine"))
 
     else:
-        # Stratum 2 & 3: Telemetry & Math Breakdown + Sync History
+        # Stratum 2 & 3: Multi-Peer Evaluation Table + Math/History
         layout["main"].split_row(
-            Layout(name="math", ratio=1),
-            Layout(name="history", ratio=1),
+            Layout(name="peers", ratio=3),
+            Layout(name="history", ratio=2),
         )
 
-        # Mathematical Formula Panel
-        math_content = Text()
+        # Peer Evaluation Table
+        peer_table = Table(title="Upstream Peer Telemetry & Fault Detection", expand=True, border_style="dim")
+        peer_table.add_column("Upstream Peer", style="bold white", ratio=2)
+        peer_table.add_column("Delay (δ)", justify="right", style="cyan", ratio=1)
+        peer_table.add_column("Reported (θ)", justify="right", style="yellow", ratio=2)
+        peer_table.add_column("Classification", justify="center", ratio=2)
+        peer_table.add_column("Filter Action", justify="left", ratio=2)
+
         with state.lock:
-            t1_s = VirtualClock.format_ts(state.t1) if state.t1 else "--:--:--.---"
-            t2_s = VirtualClock.format_ts(state.t2) if state.t2 else "--:--:--.---"
-            t3_s = VirtualClock.format_ts(state.t3) if state.t3 else "--:--:--.---"
-            t4_s = VirtualClock.format_ts(state.t4) if state.t4 else "--:--:--.---"
-            delay_str = f"{state.last_delay * 1000:+.3f} ms" if state.last_delay is not None else "-- ms"
-            theta_str = f"{state.last_theta:+.6f} s ({state.last_theta * 1000:+.3f} ms)" if state.last_theta is not None else "-- s"
+            reports = dict(state.peer_reports)
 
-        math_content.append("4-Timestamp Protocol:\n", style="bold underline")
-        math_content.append(f"  T1 (Client Send) : {t1_s}\n", style="cyan")
-        math_content.append(f"  T2 (Server Recv) : {t2_s}\n", style="yellow")
-        math_content.append(f"  T3 (Server Send) : {t3_s}\n", style="green")
-        math_content.append(f"  T4 (Client Recv) : {t4_s}\n\n", style="magenta")
+        for p_key, p_data in reports.items():
+            if p_data.get("status") == "RESPONDED":
+                c_style = "bold green" if "TRUECHIMER" in p_data.get("classification", "") else "bold red"
+                a_style = "bold bright_green" if "SELECTED" in p_data.get("action", "") else "dim"
+                peer_table.add_row(
+                    p_key,
+                    f"{p_data['delay'] * 1000:+.2f}ms",
+                    f"{p_data['theta']:+.4f}s",
+                    Text(p_data.get("classification", "?"), style=c_style),
+                    Text(p_data.get("action", "?"), style=a_style),
+                )
+            else:
+                peer_table.add_row(p_key, "--", "--", "[dim]NO RESPONSE[/dim]", f"[red]{p_data.get('status')}[/red]")
 
-        math_content.append("Computed Variables:\n", style="bold underline")
-        math_content.append(f"  Delay  (δ) = (T4-T1) - (T3-T2) : [bold]{delay_str}[/bold]\n")
-        math_content.append(f"  Offset (θ) = ((T2-T1)+(T3-T4))/2: [bold]{theta_str}[/bold]\n\n")
-        math_content.append("Adjustment: Virtual Clock += θ", style="dim italic")
-
-        layout["main"]["math"].update(Panel(math_content, border_style="cyan", title="NTP Mathematical Deduction"))
+        layout["main"]["peers"].update(Panel(peer_table, border_style="dodger_blue1", title="Peer Cross-Validation"))
 
         # History Table
-        hist_table = Table(title="Recent Synchronization Rounds", expand=True, border_style="dim")
+        hist_table = Table(title="Convergence Rounds", expand=True, border_style="dim")
         hist_table.add_column("Time", style="dim", no_wrap=True)
-        hist_table.add_column("Delay", justify="right", style="cyan")
-        hist_table.add_column("Applied Offset (θ)", justify="right", style="bold yellow")
-        hist_table.add_column("Virtual Time Shift", justify="center", style="white")
+        hist_table.add_column("Peer", style="white")
+        hist_table.add_column("Mode", style="cyan")
+        hist_table.add_column("Offset (θ)", justify="right", style="bold yellow")
 
         with state.lock:
             for h in list(state.sync_history):
                 hist_table.add_row(
                     VirtualClock.format_ts(h["time"]),
-                    f"{h['delay_ms']:+.2f}ms",
+                    h["peer"].split(":")[0],
+                    h["mode"],
                     f"{h['theta_s']:+.4f}s",
-                    f"{VirtualClock.format_ts(h['before'])} → {VirtualClock.format_ts(h['after'])}",
                 )
 
-        layout["main"]["history"].update(Panel(hist_table, border_style="magenta", title="Convergence History"))
+        layout["main"]["history"].update(Panel(hist_table, border_style="magenta", title="Sync History"))
 
-    # 4. FOOTER
+    # 4. FOOTER WITH HOTKEYS
     layout["footer"].update(
         Panel(
-            Align.center("[dim]Press [bold red]Ctrl+C[/bold red] to stop the simulation gracefully | Group Distributed Systems Project[/dim]"),
+            Align.center(
+                "[bold bright_yellow][F][/bold bright_yellow] Toggle Falseticker (+60s)  |  "
+                "[bold cyan][M][/bold cyan] Toggle Slew/Step  |  "
+                "[bold green][D][/bold green] Toggle Hardware Drift (+5ms/s)  |  "
+                "[bold red][Q][/bold red] Quit"
+            ),
             border_style="dim",
         )
     )
 
     return layout
+
+
+def key_listener_worker(state: SharedState, clock: VirtualClock, stop_event: threading.Event) -> None:
+    """Listens for single keypresses to trigger runtime toggles without pressing Enter."""
+    reader = KeyReader()
+    try:
+        while not stop_event.is_set():
+            ch = reader.read_key(timeout=0.1)
+            if not ch:
+                continue
+            key = ch.lower()
+            if key == "f":
+                state.toggle_falseticker()
+            elif key == "m":
+                state.toggle_sync_mode()
+            elif key == "d":
+                clock.toggle_drift()
+            elif key == "q":
+                stop_event.set()
+                break
+    finally:
+        reader.restore()
 
 
 def parse_upstream(value: str) -> Tuple[str, int]:
@@ -434,49 +686,58 @@ def parse_upstream(value: str) -> Tuple[str, int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="NTP Stratum Simulation Node (Interactive TUI)")
+    parser = argparse.ArgumentParser(description="NTP Stratum Simulation Node (Interactive TUI with Fault Injection)")
     parser.add_argument("--stratum", type=int, required=True, choices=[1, 2, 3], help="Node stratum level (1, 2, or 3)")
     parser.add_argument("--port", type=int, default=5000, help="UDP port to listen on (Stratum 1 & 2, default: 5000)")
-    parser.add_argument("--upstream", type=parse_upstream, help="Upstream server HOST:PORT (required for Stratum 2 & 3)")
-    parser.add_argument("--interval", type=float, default=5.0, help="Sync interval in seconds (default: 5.0)")
+    parser.add_argument(
+        "--upstream",
+        type=parse_upstream,
+        nargs="+",
+        help="One or more upstream server HOST:PORT (e.g. 192.168.1.11:5000 192.168.1.12:5000)",
+    )
+    parser.add_argument("--interval", type=float, default=4.0, help="Sync interval in seconds (default: 4.0)")
     parser.add_argument("--no-ui", action="store_true", help="Disable Rich TUI and output simple logs")
     args = parser.parse_args()
 
-    if args.stratum > 1 and args.upstream is None:
+    if args.stratum > 1 and not args.upstream:
         parser.error(f"--upstream is required when --stratum is {args.stratum}")
+
+    upstreams = args.upstream if args.upstream else []
 
     if args.stratum == 1:
         initial_offset = 0.0
     else:
-        # Initial random offset between -30s and -5s or +5s and +30s
+        # Initial random offset between -30s and +30s
         initial_offset = random.choice([-1, 1]) * random.uniform(5.0, 30.0)
 
     clock = VirtualClock(initial_offset=initial_offset)
-    state = SharedState(stratum=args.stratum, port=args.port, upstream=args.upstream)
+    state = SharedState(stratum=args.stratum, port=args.port, upstreams=upstreams)
     stop_event = threading.Event()
     threads: list[threading.Thread] = []
 
+    # Start Clock Tick worker for drift and slewing
+    ticker_thread = threading.Thread(target=clock_tick_worker, args=(clock, stop_event), daemon=True)
+    ticker_thread.start()
+    threads.append(ticker_thread)
+
+    # Start Keyboard listener thread
+    key_thread = threading.Thread(target=key_listener_worker, args=(state, clock, stop_event), daemon=True)
+    key_thread.start()
+    threads.append(key_thread)
+
     # Start Server thread if Stratum 1 or 2
     if args.stratum in (1, 2):
-        srv_thread = threading.Thread(
-            target=run_server,
-            args=(clock, state, stop_event),
-            daemon=True,
-        )
+        srv_thread = threading.Thread(target=run_server, args=(clock, state, stop_event), daemon=True)
         srv_thread.start()
         threads.append(srv_thread)
 
     # Start Client thread if Stratum 2 or 3
-    if args.stratum in (2, 3) and args.upstream is not None:
-        cli_thread = threading.Thread(
-            target=run_client,
-            args=(clock, state, args.interval, stop_event),
-            daemon=True,
-        )
+    if args.stratum in (2, 3) and state.upstreams:
+        cli_thread = threading.Thread(target=run_client, args=(clock, state, args.interval, stop_event), daemon=True)
         cli_thread.start()
         threads.append(cli_thread)
 
-    # UI RENDERING
+    # UI RENDERING LOOP
     if HAS_RICH and not args.no_ui:
         console = Console()
         with Live(build_dashboard(clock, state), console=console, refresh_per_second=10, screen=True) as live:
@@ -487,13 +748,13 @@ def main() -> None:
             except KeyboardInterrupt:
                 stop_event.set()
     else:
-        # Fallback console mode
         print(f"=== NTP Node Started (Stratum {args.stratum}) | Initial Offset: {initial_offset:+.3f}s ===")
+        print("Hotkeys: [F] Toggle Falseticker | [M] Toggle Slew/Step | [D] Toggle Drift | [Q] Quit")
         try:
             while not stop_event.is_set():
                 print(
                     f"[{VirtualClock.format_ts(clock.now())}] Offset: {clock.get_offset():+.6f}s "
-                    f"(Syncs: {state.sync_count}, SrvReqs: {state.server_req_count})"
+                    f"| Mode: {state.sync_mode} | Falseticker: {state.falseticker_mode}"
                 )
                 time.sleep(args.interval)
         except KeyboardInterrupt:
