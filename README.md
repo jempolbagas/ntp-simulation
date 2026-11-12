@@ -1,6 +1,6 @@
-# ⏱️ NTP Stratum Simulation (Enhanced Visual TUI with Chaos Fault Injection)
+# NTP Stratum Simulation (Engineering TUI & Fault Injection)
 
-Simulasi **Network Time Protocol (RFC 5905)** berbasis arsitektur **Hierarki Stratum (Stratum 1, 2, dan 3)** dengan **Interactive Terminal User Interface (TUI)** modern, **Multi-Peer Cross Validation**, **Slew vs Step Dynamic Progress**, dan **Chaos Fault Injection** untuk tugas kelompok mata kuliah Sistem Terdistribusi (6 node/laptop).
+Simulasi **Network Time Protocol (RFC 5905)** berbasis arsitektur **Hierarki Stratum (Stratum 1, 2, dan 3)** dengan **Terminal User Interface (TUI)** modern berstandar engineering, **Multi-Peer Cross Validation**, **Slew vs Step Dynamic Progress**, dan **Chaos Fault Injection** untuk tugas kelompok mata kuliah Sistem Terdistribusi (6 node/laptop).
 
 ![Language](https://img.shields.io/badge/Language-Python%203.8+-blue.svg)
 ![Interface](https://img.shields.io/badge/Interface-Rich%20TUI%20Dashboard-brightgreen.svg)
@@ -8,49 +8,49 @@ Simulasi **Network Time Protocol (RFC 5905)** berbasis arsitektur **Hierarki Str
 
 ---
 
-## 🌟 Fitur Baru & Peningkatan Visual
+## Fitur Utama
 
-### 1. 🖥️ Deteksi & Tampilan IP Lokal Otomatis
-- Header sekarang langsung menampilkan **Alamat IP LAN laptop**:
-  `IP: 192.168.1.45:5000 (hostname: bagas-laptop)`
-- Sangat mempermudah koordinasi saat demo di kelas; anggota lain langsung tahu IP mana yang harus dimasukkan ke `--upstream` tanpa perlu buka `ipconfig` atau `ifconfig`.
+### 1. Freeze / Pause UI [SPACE]
+- Tekan **`[SPACE]`** untuk membekukan tampilan antarmuka secara instan.
+- **Proses sinkronisasi di latar belakang tetap berjalan normal** (server tetap melayani UDP, client tetap melakukan polling dan kalkulasi $\theta$ dan $\delta$).
+- Sangat berguna saat presentasi di depan dosen untuk menghentikan pergerakan angka sementara dan mengamati perbandingan clock telemetry secara mendalam.
+- Tekan **`[SPACE]`** kembali untuk melanjutkan rendering live.
 
-### 2. 🌊 Perbedaan Nyata `SLEW` vs `STEP` Mode
-- **`STEP` (Instant Jump):** Jam langsung melompat seketika ke waktu baru. Banner menampilkan `⚡ INSTANT STEP APPLIED: Clock shifted +14.2s`.
-- **`SLEW` (Gradual Adaptation):** Jam tidak melompat (menjaga konsistensi sistem file & DB). Jam beradaptasi secara gradual ($\pm 0.40\text{ s/s}$) lengkap dengan **Animated Progress Bar**:
-  `🌊 SLEWING SMOOTHLY: [████████████░░░░░░] 68% (Left: +3.200s / Total: +14.200s)`
+### 2. Dynamic Brownian Hardware Drift
+- Tekan **`[D]`** untuk mengaktifkan simulasi osilator kuarsa fisik dinamis (random walk / thermal fluctuation).
+- Nilai drift tidak konstan, melainkan bergerak dinamis naik dan turun (antara $-25\text{ ms/s}$ hingga $+25\text{ ms/s}$):
+  `[DRIFT: +14.2ms/s FAST]` -> `[DRIFT: +8.5ms/s FAST]` -> `[DRIFT: -3.1ms/s SLOW]`
 
-### 3. 📉 Random Hardware Drift (Bisa Positif dan Negatif)
-- Tekan **`[D]`**: Osilator kuarsa fisik akan meleset secara acak, bisa **melambat** maupun **mempercepat**:
-  - `📈 DRIFT: +18.4ms/s (FAST)`
-  - `📉 DRIFT: -14.2ms/s (SLOW)`
+### 3. Perbedaan Nyata Slew vs Step Mode
+- **`STEP` (Instant Jump):** Jam langsung melompat seketika ke waktu baru.
+- **`SLEW` (Gradual Adaptation):** Jam tidak melompat (menjaga konsistensi sistem file & DB). Jam beradaptasi secara gradual ($\pm 0.40\text{ s/s}$) lengkap dengan **Progress Bar**:
+  `[SLEWING SMOOTHLY] Left: +3.200s / Total: +14.200s  [████████████░░░░░░] 77%`
 
-### 4. 🎲 Falseticker: Manual vs Auto-Chaos (Random Occurrence)
-- **`[F]` - Manual Falseticker:** Menyuntikkan distorsi waktu tetap $+60.0$ detik secara konstan. Layar membelah menampilkan jam asli vs jam palsu yang disiarkan.
-- **`[C]` - Auto Chaos Mode (Random Glitches):** Mengaktifkan gangguan acak intermittant (peluang 35% di tiap request menghasilkan lonjakan skew acak $\pm 30\text{s}$ s.d. $\pm 90\text{s}$).
+### 4. Falseticker: Manual vs Auto-Chaos
+- **`[F]` - Manual Falseticker:** Menyuntikkan distorsi waktu $+60.0$ detik secara konstan. Layar membelah menampilkan jam asli vs jam palsu yang disiarkan.
+- **`[C]` - Auto Chaos Mode:** Mengaktifkan gangguan acak sporadis (peluang 35% di tiap request menghasilkan lonjakan skew acak $\pm 30\text{s}$ s.d. $\pm 90\text{s}$).
 
-### 5. 📊 Elemen Visual Tambahan
-- **Visual Stratum Hierarchy Map:**
-  `[ Stratum 1 Master ] ──UDP──> [ STRATUM 2: THIS RELAY ] ──UDP──> [ Stratum 3 Leaf Clients ]`
-- **Offset Sparkline Trend:**
-  Grafik mini Unicode yang memvisualisasikan penurunan offset dari waktu ke waktu: `█▆▅▃▂     `.
-- **Packet Counters:** Menampilkan jumlah total paket request yang terkirim (`TX`) dan diterima (`RX`).
+### 5. Deteksi IP Lokal Otomatis & Visual Topology
+- Header langsung menampilkan **Alamat IP LAN laptop**:
+  `IP: 192.168.1.45:5000 (hostname: laptop-bagas)`
+- Diagram hierarki Stratum visual dan grafik sparkline Unicode (`█▆▅▃▂     `) untuk memantau kurva konvergensi waktu.
 
 ---
 
-## 🎮 Hotkeys Interaktif (Tanpa Perlu Tekan Enter)
+## Hotkeys Interaktif
 
 | Tombol | Fungsi | Keterangan |
 | :---: | :--- | :--- |
-| **`[F]`** | **Toggle Manual Falseticker** | Menyuntikkan kesalahan waktu $+60$ detik secara sengaja. |
-| **`[C]`** | **Toggle Auto-Chaos Mode** | Mengaktifkan gangguan waktu acak sporadis (35% probability). |
-| **`[M]`** | **Toggle Slew vs Step** | Beralih antara lompatan instan (`STEP`) atau penyesuaian halus (`SLEW`). |
-| **`[D]`** | **Toggle Random Drift** | Mengaktifkan/menonaktifkan drift acak ($\pm \text{ms/s}$). |
+| **`[SPACE]`** | **Freeze/Pause UI** | Membekukan telemetry di layar tanpa menghentikan proses background. |
+| **`[F]`** | **Manual Falseticker** | Menyuntikkan kesalahan waktu $+60$ detik secara sengaja. |
+| **`[C]`** | **Auto-Chaos Mode** | Mengaktifkan gangguan waktu acak sporadis (35% probability). |
+| **`[M]`** | **Slew vs Step** | Beralih antara lompatan instan (`STEP`) atau penyesuaian halus (`SLEW`). |
+| **`[D]`** | **Dynamic Drift** | Mengaktifkan/menonaktifkan drift acak dinamis ($\pm\text{ms/s}$). |
 | **`[Q]`** | **Quit** | Keluar dari aplikasi dengan bersih. |
 
 ---
 
-## 🚀 Instalasi & Persiapan
+## Instalasi & Persiapan
 
 ```bash
 git clone https://github.com/jempolbagas/ntp-simulation.git
@@ -60,7 +60,7 @@ pip install -r requirements.txt
 
 ---
 
-## 💻 Panduan Menjalankan
+## Panduan Menjalankan
 
 ### Skenario Demo 6 Laptop (Wi-Fi / LAN / Tailscale)
 
@@ -79,14 +79,3 @@ Jalankan di masing-masing laptop:
 | **Laptop 4** | **Stratum 3 (Client 1)** | `python3 ntp_node.py --stratum 3 --upstream 192.168.1.11:5000 192.168.1.12:5000` |
 | **Laptop 5** | **Stratum 3 (Client 2)** | `python3 ntp_node.py --stratum 3 --upstream 192.168.1.11:5000 192.168.1.12:5000` |
 | **Laptop 6** | **Stratum 3 (Client 3)** | `python3 ntp_node.py --stratum 3 --upstream 192.168.1.11:5000 192.168.1.12:5000` |
-
----
-
-## 📐 Rumus Matematis NTP
-
-$$\delta = (T_4 - T_1) - (T_3 - T_2) \quad \text{(Round-Trip Delay)}$$
-
-$$\theta = \frac{(T_2 - T_1) + (T_3 - T_4)}{2} \quad \text{(Clock Offset)}$$
-
-- **Step Mode:** $Waktu_{\text{baru}} = Waktu_{\text{saat\_ini}} + \theta$
-- **Slew Mode:** Penyesuaian bertahap $\pm 0.40\text{ s/s}$ hingga target $\theta$ tercapai tanpa merusak timer aplikasi.

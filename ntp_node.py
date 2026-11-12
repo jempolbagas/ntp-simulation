@@ -88,14 +88,20 @@ class KeyReader:
 
 
 class VirtualClock:
-    """Thread-safe virtual clock simulating local time, random negative/positive drift, and smooth slewing."""
+    """Thread-safe virtual clock with dynamic Brownian drift and slewing."""
 
     def __init__(self, initial_offset: float = 0.0):
         self._offset = initial_offset
         self._slew_total_target = 0.0
         self._slew_remaining = 0.0
-        self._slew_rate = 0.40  # ±0.40 seconds per second adjustment speed during slewing
-        self._drift_rate = 0.0  # seconds per second physical crystal drift (positive or negative)
+        self._slew_rate = 0.40  # ±0.40 s/s adjustment speed during slewing
+
+        # Dynamic Brownian drift simulation
+        self._drift_active = False
+        self._drift_rate = 0.0  # current instantaneous drift rate (s/s)
+        self._drift_target = 0.0
+        self._last_drift_shift = time.time()
+
         self._last_tick = time.time()
         self._lock = threading.Lock()
 
@@ -111,7 +117,7 @@ class VirtualClock:
             self._slew_total_target = 0.0
 
     def start_slew(self, delta: float) -> None:
-        """Gradual clock adjustment (slewing) without sudden discontinuous jumps."""
+        """Gradual clock adjustment (slewing) without discontinuous jumps."""
         with self._lock:
             self._slew_remaining += delta
             self._slew_total_target = self._slew_remaining
@@ -123,8 +129,20 @@ class VirtualClock:
             dt = now_real - self._last_tick
             self._last_tick = now_real
 
-            # Apply simulated hardware drift (positive or negative)
-            if self._drift_rate != 0.0:
+            # Dynamic continuous random walk drift
+            if self._drift_active:
+                # Every 1-2 seconds, adjust target drift direction slightly
+                if now_real - self._last_drift_shift > 1.2:
+                    self._drift_target += random.uniform(-0.006, 0.006)
+                    # Bound maximum drift target between -25ms/s and +25ms/s
+                    self._drift_target = max(-0.025, min(0.025, self._drift_target))
+                    self._last_drift_shift = now_real
+
+                # Smoothly interpolate current drift rate toward drift target
+                drift_step = (self._drift_target - self._drift_rate) * min(1.0, dt * 2.0)
+                self._drift_rate += drift_step
+
+                # Apply continuous drift to offset
                 self._offset += self._drift_rate * dt
 
             # Apply gradual slewing
@@ -154,19 +172,25 @@ class VirtualClock:
 
     def get_drift_rate(self) -> float:
         with self._lock:
-            return self._drift_rate
+            return self._drift_rate if self._drift_active else 0.0
 
-    def toggle_drift(self) -> float:
-        """Toggles hardware drift with a randomized positive or negative rate."""
+    def is_drift_active(self) -> bool:
         with self._lock:
-            if self._drift_rate == 0.0:
-                # Random drift between -25ms/s to -5ms/s or +5ms/s to +25ms/s
-                direction = random.choice([-1.0, 1.0])
-                speed = random.uniform(0.005, 0.025)
-                self._drift_rate = direction * speed
+            return self._drift_active
+
+    def toggle_drift(self) -> bool:
+        """Toggles hardware dynamic drift on/off."""
+        with self._lock:
+            self._drift_active = not self._drift_active
+            if self._drift_active:
+                # Seed with an initial random drift
+                self._drift_target = random.choice([-1.0, 1.0]) * random.uniform(0.005, 0.018)
+                self._drift_rate = self._drift_target
+                self._last_drift_shift = time.time()
             else:
                 self._drift_rate = 0.0
-            return self._drift_rate
+                self._drift_target = 0.0
+            return self._drift_active
 
     @staticmethod
     def format_ts(ts: float) -> str:
@@ -174,7 +198,7 @@ class VirtualClock:
 
 
 class SharedState:
-    """Thread-safe data store for UI rendering and runtime toggles."""
+    """Thread-safe data store for telemetry, background workers, and UI state."""
 
     def __init__(self, stratum: int, port: int, upstreams: List[Tuple[str, int]]):
         self.stratum = stratum
@@ -183,6 +207,10 @@ class SharedState:
         self.hostname = socket.gethostname()
         self.upstreams = upstreams
         self.lock = threading.Lock()
+
+        # UI Freeze / Pause State (Spacebar)
+        self.ui_paused: bool = False
+        self.frozen_snapshot: Optional[dict] = None
 
         # Runtime interactive toggles
         self.falseticker_mode: bool = False  # Manual toggle [F]
@@ -216,6 +244,36 @@ class SharedState:
         self.sync_history: Deque[dict] = collections.deque(maxlen=6)
         self.offset_samples: Deque[float] = collections.deque(maxlen=20)
 
+    def toggle_ui_pause(self, clock: VirtualClock) -> bool:
+        """Freezes or unfreezes the UI rendering without stopping background processes."""
+        with self.lock:
+            self.ui_paused = not self.ui_paused
+            if self.ui_paused:
+                now_os = time.time()
+                now_virtual = clock.now()
+                slew_rem, slew_target, slew_ratio = clock.get_slew_info()
+                self.frozen_snapshot = {
+                    "now_os": now_os,
+                    "now_virtual": now_virtual,
+                    "offset": clock.get_offset(),
+                    "drift_rate": clock.get_drift_rate(),
+                    "slew_rem": slew_rem,
+                    "slew_target": slew_target,
+                    "slew_ratio": slew_ratio,
+                    "peer_reports": dict(self.peer_reports),
+                    "server_logs": list(self.recent_server_logs),
+                    "sync_history": list(self.sync_history),
+                    "offset_samples": list(self.offset_samples),
+                    "tx": self.tx_count,
+                    "rx": self.rx_count,
+                    "pause_time": now_os,
+                }
+                self.last_action_banner = "UI TELEMETRY FROZEN (Background sync processes continue running)"
+            else:
+                self.frozen_snapshot = None
+                self.last_action_banner = "UI Telemetry Resumed"
+            return self.ui_paused
+
     def toggle_falseticker(self) -> bool:
         with self.lock:
             self.falseticker_mode = not self.falseticker_mode
@@ -226,7 +284,7 @@ class SharedState:
     def toggle_chaos(self) -> bool:
         with self.lock:
             self.chaos_mode = not self.chaos_mode
-            status = "ENABLED (35% Random Glitches)" if self.chaos_mode else "DISABLED"
+            status = "ENABLED (35% Sporadic Glitches)" if self.chaos_mode else "DISABLED"
             self.last_action_banner = f"Random Chaos Mode: {status}"
             return self.chaos_mode
 
@@ -282,9 +340,9 @@ class SharedState:
             self.offset_samples.append(theta)
 
             if mode == "STEP":
-                self.last_action_banner = f"⚡ INSTANT STEP APPLIED: Clock shifted {theta:+.4f}s"
+                self.last_action_banner = f"[STEP APPLIED] Clock shifted {theta:+.4f}s"
             else:
-                self.last_action_banner = f"🌊 SLEW IN PROGRESS: Gradually adapting clock toward {theta:+.4f}s"
+                self.last_action_banner = f"[SLEW ACTIVE] Adapting clock smoothly toward {theta:+.4f}s"
 
             self.sync_history.appendleft({
                 "time": time.time(),
@@ -298,7 +356,7 @@ class SharedState:
 
 
 def clock_tick_worker(clock: VirtualClock, stop_event: threading.Event) -> None:
-    """Worker loop that drives gradual slewing and continuous drift simulation."""
+    """Worker loop that drives gradual slewing and continuous dynamic drift simulation."""
     while not stop_event.is_set():
         clock.tick()
         time.sleep(0.04)
@@ -329,7 +387,6 @@ def run_server(clock: VirtualClock, state: SharedState, stop_event: threading.Ev
 
             t3 = clock.now()
 
-            # CHECK FAULT INJECTION (Manual or Random Chaos Occurrence)
             with state.lock:
                 manual_fault = state.falseticker_mode
                 chaos_active = state.chaos_mode
@@ -342,7 +399,6 @@ def run_server(clock: VirtualClock, state: SharedState, stop_event: threading.Ev
                 is_corrupted = True
                 applied_skew = default_skew
             elif chaos_active and (random.random() < 0.35):
-                # Random occurrence: 35% chance of sporadic glitch
                 is_corrupted = True
                 applied_skew = random.choice([-1.0, 1.0]) * random.uniform(30.0, 90.0)
 
@@ -426,7 +482,7 @@ def run_client(
 
             if len(responded_peers) == 1:
                 p_key = list(responded_peers.keys())[0]
-                responded_peers[p_key]["classification"] = "TRUECHIMER"
+                responded_peers[p_key]["classification"] = "[TRUECHIMER]"
                 responded_peers[p_key]["action"] = "SELECTED"
                 chosen_peer = p_key
 
@@ -442,13 +498,13 @@ def run_client(
                     for p_key, data in items:
                         ref = baseline if baseline is not None else (sum(thetas) / len(thetas))
                         if abs(data["theta"] - ref) > 10.0:
-                            data["classification"] = "⚠️ FALSETICKER"
+                            data["classification"] = "[FALSETICKER]"
                             data["action"] = "DISCARDED (Outlier)"
                         else:
-                            data["classification"] = "● TRUECHIMER"
+                            data["classification"] = "[TRUECHIMER]"
                             data["action"] = "CANDIDATE"
 
-                    truechimers = [k for k, v in items if v.get("classification") == "● TRUECHIMER"]
+                    truechimers = [k for k, v in items if v.get("classification") == "[TRUECHIMER]"]
                     if truechimers:
                         chosen_peer = min(truechimers, key=lambda k: responded_peers[k]["delay"])
                         responded_peers[chosen_peer]["action"] = "SELECTED FOR SYNC"
@@ -457,7 +513,7 @@ def run_client(
                         responded_peers[chosen_peer]["action"] = "FALLBACK"
                 else:
                     for _, data in items:
-                        data["classification"] = "● TRUECHIMER"
+                        data["classification"] = "[TRUECHIMER]"
                         data["action"] = "CANDIDATE"
                     chosen_peer = min(responded_peers.keys(), key=lambda k: responded_peers[k]["delay"])
                     responded_peers[chosen_peer]["action"] = "SELECTED (Lowest Delay)"
@@ -499,7 +555,7 @@ def run_client(
 
 
 def generate_sparkline(values: List[float], width: int = 14) -> str:
-    """Generate a visual Unicode sparkline graph showing offset convergence."""
+    """Generate clean Unicode sparkline graph showing offset convergence."""
     if not values:
         return " " * width
     bars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
@@ -516,7 +572,7 @@ def generate_sparkline(values: List[float], width: int = 14) -> str:
 
 
 def render_offset_gauge(offset: float, width: int = 36) -> Text:
-    """Render a visual ASCII/Unicode meter showing offset deviation."""
+    """Render a clean ASCII/Unicode meter showing offset deviation."""
     abs_val = abs(offset)
     gauge = Text()
 
@@ -556,12 +612,12 @@ def render_offset_gauge(offset: float, width: int = 36) -> Text:
         desc = "MODERATE DRIFT"
     else:
         status_color = "bold red"
-        desc = "HIGH SKEW / UNSYNCED"
+        desc = "HIGH SKEW"
 
     gauge.append(f"{label_l:>6} [")
     gauge.append(gauge_str, style=status_color)
     gauge.append(f"] {label_r:<6} ")
-    gauge.append(f"● {desc}", style=status_color)
+    gauge.append(f"[{desc}]", style=status_color)
     return gauge
 
 
@@ -569,20 +625,20 @@ def render_topology_diagram(stratum: int) -> Text:
     """Renders visual ASCII topology hierarchy diagram highlighting current node."""
     diag = Text()
     if stratum == 1:
-        diag.append("[ STRATUM 1: MASTER ]", style="bold black on bright_yellow")
-        diag.append(" ──UDP──> [ Stratum 2 Relays ] ──UDP──> [ Stratum 3 Leaf Clients ]", style="dim")
+        diag.append("[STRATUM 1: MASTER]", style="bold black on bright_yellow")
+        diag.append(" --> [Stratum 2 Relays] --> [Stratum 3 Clients]", style="dim")
     elif stratum == 2:
-        diag.append("[ Stratum 1 Master ] ──UDP──> ", style="dim")
-        diag.append("[ STRATUM 2: THIS RELAY ]", style="bold white on dodger_blue1")
-        diag.append(" ──UDP──> [ Stratum 3 Leaf Clients ]", style="dim")
+        diag.append("[Stratum 1 Master] --> ", style="dim")
+        diag.append("[STRATUM 2: THIS RELAY]", style="bold white on dodger_blue1")
+        diag.append(" --> [Stratum 3 Clients]", style="dim")
     else:
-        diag.append("[ Stratum 1 Master ] ──UDP──> [ Stratum 2 Relays ] ──UDP──> ", style="dim")
-        diag.append("[ STRATUM 3: THIS CLIENT ]", style="bold white on dark_green")
+        diag.append("[Stratum 1 Master] --> [Stratum 2 Relays] --> ", style="dim")
+        diag.append("[STRATUM 3: THIS CLIENT]", style="bold white on dark_green")
     return diag
 
 
 def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
-    """Build modern Rich TUI layout with enhanced visual metrics, topology, and IP banner."""
+    """Build modern Rich TUI layout with minimal emojis and support for UI pause."""
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=4),
@@ -591,23 +647,45 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         Layout(name="footer", size=3),
     )
 
-    now_os = time.time()
-    now_virtual = clock.now()
-    current_offset = clock.get_offset()
-    slew_rem, slew_target, slew_ratio = clock.get_slew_info()
-    drift_rate = clock.get_drift_rate()
-
     with state.lock:
+        is_paused = state.ui_paused
+        snap = state.frozen_snapshot
         is_falseticker = state.falseticker_mode
         chaos_active = state.chaos_mode
         fault_skew = state.falseticker_skew
         sync_mode = state.sync_mode
-        samples = list(state.offset_samples)
         last_banner = state.last_action_banner
-        tx = state.tx_count
-        rx = state.rx_count
 
-    # 1. HEADER SECTION (With Node IP & Network Identity)
+    # Use frozen snapshot values if UI is paused (spacebar)
+    if is_paused and snap is not None:
+        now_os = snap["now_os"]
+        now_virtual = snap["now_virtual"]
+        current_offset = snap["offset"]
+        drift_rate = snap["drift_rate"]
+        slew_rem = snap["slew_rem"]
+        slew_target = snap["slew_target"]
+        slew_ratio = snap["slew_ratio"]
+        reports = snap["peer_reports"]
+        server_logs = snap["server_logs"]
+        history_logs = snap["sync_history"]
+        samples = snap["offset_samples"]
+        tx = snap["tx"]
+        rx = snap["rx"]
+    else:
+        now_os = time.time()
+        now_virtual = clock.now()
+        current_offset = clock.get_offset()
+        slew_rem, slew_target, slew_ratio = clock.get_slew_info()
+        drift_rate = clock.get_drift_rate()
+        with state.lock:
+            reports = dict(state.peer_reports)
+            server_logs = list(state.recent_server_logs)
+            history_logs = list(state.sync_history)
+            samples = list(state.offset_samples)
+            tx = state.tx_count
+            rx = state.rx_count
+
+    # 1. HEADER SECTION
     stratum_badges = {
         1: ("[bold black on bright_yellow] STRATUM 1: ROOT MASTER [/]", "cyan"),
         2: ("[bold white on dodger_blue1] STRATUM 2: SECONDARY RELAY [/]", "dodger_blue1"),
@@ -616,22 +694,24 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
     badge_title, border_color = stratum_badges.get(state.stratum, ("[UNKNOWN]", "white"))
 
     # Status / Fault indicator
-    if is_falseticker:
-        fault_badge = f"[bold white on red] ⚠️ MANUAL FALSETICKER (+60s FAULT) [/bold white on red]"
+    if is_paused:
+        fault_badge = "[bold black on bright_yellow] [PAUSED - PRESS SPACE TO RESUME] [/bold black on bright_yellow]"
+    elif is_falseticker:
+        fault_badge = "[bold white on red] [FALSETICKER: +60s FAULT] [/bold white on red]"
     elif chaos_active:
-        fault_badge = "[bold white on dark_magenta] 🎲 CHAOS ACTIVE (35% Sporadic Glitches) [/bold white on dark_magenta]"
+        fault_badge = "[bold white on dark_magenta] [CHAOS ACTIVE: 35% GLITCHES] [/bold white on dark_magenta]"
     else:
-        fault_badge = "[bold green]● HONEST TIME SERVER[/bold green]" if state.stratum in (1, 2) else "[dim]Client Node[/dim]"
+        fault_badge = "[bold green][ONLINE SERVER][/bold green]" if state.stratum in (1, 2) else "[dim][CLIENT NODE][/dim]"
 
-    # Drift indicator (can be positive or negative)
+    # Dynamic drift indicator
     if drift_rate > 0.0:
-        drift_badge = f"[bold yellow]📈 DRIFT: {drift_rate * 1000:+.1f}ms/s (FAST)[/bold yellow]"
+        drift_badge = f"[bold yellow][DRIFT: {drift_rate * 1000:+.1f}ms/s FAST][/bold yellow]"
     elif drift_rate < 0.0:
-        drift_badge = f"[bold red]📉 DRIFT: {drift_rate * 1000:+.1f}ms/s (SLOW)[/bold red]"
+        drift_badge = f"[bold red][DRIFT: {drift_rate * 1000:+.1f}ms/s SLOW][/bold red]"
     else:
-        drift_badge = "[dim]DRIFT: OFF[/dim]"
+        drift_badge = "[dim][DRIFT: OFF][/dim]"
 
-    mode_badge = f"[bold white on dark_cyan] MODE: {sync_mode} [/bold white on dark_cyan]"
+    mode_badge = f"[bold white on dark_cyan] [{sync_mode} MODE] [/bold white on dark_cyan]"
 
     header_table = Table.grid(expand=True)
     header_table.add_column(justify="left", ratio=3)
@@ -666,8 +746,8 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
                 border_style="white",
             ),
             Panel(
-                Align.center(f"[bold bright_white on red] {VirtualClock.format_ts(fake_ts)} [/bold bright_white on red]\n[bold red]Emitted to Clients (+60s)[/bold red]"),
-                title="[bold red]⚠️ Broadcasted Fake Time[/bold red]",
+                Align.center(f"[bold bright_white on red] {VirtualClock.format_ts(fake_ts)} [/bold bright_white on red]\n[bold red]Emitted (+60s Fake)[/bold red]"),
+                title="[bold red]Broadcasted Fake Time[/bold red]",
                 border_style="bold red",
             ),
             Panel(
@@ -696,23 +776,21 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
                 border_style=border_color,
             ),
             Panel(
-                Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n[dim]Δ Virtual vs Host[/dim]"),
+                Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n[dim]Delta (Virtual vs Host)[/dim]"),
                 title="[bold]Clock Deviation[/bold]",
                 border_style=offset_color,
             ),
         )
 
-    # VISUAL ENHANCEMENT: Slew Progress Bar vs Step Flash
+    # Visual Slew progress bar or Sparkline
     slew_display_elements = []
     if abs(slew_rem) > 0.001:
-        # Slewing is visibly in progress!
         slew_bar = ProgressBar(total=1.0, completed=slew_ratio, width=32, style="cyan", complete_style="bold cyan")
         slew_text = Text.from_markup(
-            f"[bold cyan]🌊 SLEWING SMOOTHLY:[/] Left: [bold]{slew_rem:+.3f}s[/bold] / Total: [dim]{slew_target:+.3f}s[/dim]  "
+            f"[bold cyan][SLEWING SMOOTHLY][/] Left: [bold]{slew_rem:+.3f}s[/bold] / Total: [dim]{slew_target:+.3f}s[/dim]  "
         )
         slew_display_elements.append(Table.grid().add_row(slew_text, slew_bar))
     else:
-        # Idle or Step mode: show Sparkline convergence curve
         spark = generate_sparkline(samples, width=16)
         spark_text = Text.from_markup(f"[dim]Convergence Trend:[/] [bold green]{spark}[/bold green] (Last {len(samples)} syncs)")
         slew_display_elements.append(spark_text)
@@ -724,11 +802,11 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
     gauge_grid.add_row(gauge_text, slew_display_elements[0])
 
     clock_box = Group(clocks_table, gauge_grid)
-    layout["clocks"].update(Panel(clock_box, border_style="dim", title="Clock Telemetry & Dynamic Drift Gauge"))
+    panel_title = "Clock Telemetry [FROZEN]" if is_paused else "Clock Telemetry & Dynamic Drift Gauge"
+    layout["clocks"].update(Panel(clock_box, border_style="bright_yellow" if is_paused else "dim", title=panel_title))
 
-    # 3. MAIN BODY SECTION (With Visual Topology Diagram)
+    # 3. MAIN BODY SECTION
     if state.stratum == 1:
-        # Stratum 1: Server table + Topology
         srv_table = Table(title="Recent Inbound Client Synchronizations", expand=True, border_style="dim")
         srv_table.add_column("Timestamp", style="cyan", no_wrap=True)
         srv_table.add_column("Client IP:Port", style="bold white")
@@ -736,22 +814,21 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         srv_table.add_column("Emitted T3", style="green")
         srv_table.add_column("Integrity", justify="center")
 
-        with state.lock:
-            for item in list(state.recent_server_logs):
-                t2_str = VirtualClock.format_ts(item["t2"])
-                t3_str = VirtualClock.format_ts(item["t3"])
-                if item.get("is_fake"):
-                    integrity = f"[bold white on red] ⚠️ FAKE ({item.get('skew', 60):+.0f}s) [/bold white on red]"
-                else:
-                    integrity = "[bold green]● VALID[/bold green]"
+        for item in server_logs:
+            t2_str = VirtualClock.format_ts(item["t2"])
+            t3_str = VirtualClock.format_ts(item["t3"])
+            if item.get("is_fake"):
+                integrity = f"[bold white on red] [FAKE {item.get('skew', 60):+.0f}s] [/bold white on red]"
+            else:
+                integrity = "[bold green][VALID][/bold green]"
 
-                srv_table.add_row(
-                    VirtualClock.format_ts(item["time"]),
-                    item["client"],
-                    t2_str,
-                    t3_str,
-                    integrity,
-                )
+            srv_table.add_row(
+                VirtualClock.format_ts(item["time"]),
+                item["client"],
+                t2_str,
+                t3_str,
+                integrity,
+            )
 
         status_box = Text.from_markup(
             f"[bold]Stratum Hierarchy:[/] {render_topology_diagram(1).markup}\n"
@@ -761,7 +838,6 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         layout["main"].update(Panel(Group(srv_table, status_box), border_style="bright_yellow", title="Master Server Engine"))
 
     else:
-        # Stratum 2 & 3: Multi-Peer Evaluation Table + History
         layout["main"].split_row(
             Layout(name="peers", ratio=3),
             Layout(name="history", ratio=2),
@@ -769,13 +845,10 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
 
         peer_table = Table(title="Upstream Peer Telemetry & Fault Detection", expand=True, border_style="dim")
         peer_table.add_column("Upstream Peer", style="bold white", ratio=2)
-        peer_table.add_column("Delay (δ)", justify="right", style="cyan", ratio=1)
-        peer_table.add_column("Reported (θ)", justify="right", style="yellow", ratio=2)
+        peer_table.add_column("Delay (delta)", justify="right", style="cyan", ratio=1)
+        peer_table.add_column("Reported (theta)", justify="right", style="yellow", ratio=2)
         peer_table.add_column("Classification", justify="center", ratio=2)
         peer_table.add_column("Filter Action", justify="left", ratio=2)
-
-        with state.lock:
-            reports = dict(state.peer_reports)
 
         for p_key, p_data in reports.items():
             if p_data.get("status") == "RESPONDED":
@@ -797,7 +870,6 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         )
         layout["main"]["peers"].update(Panel(Group(peer_table, topo_and_status), border_style="dodger_blue1", title="Peer Cross-Validation"))
 
-        # History table / Inbound table for Stratum 2
         if state.stratum == 2 and state.server_req_count > 0:
             srv_table = Table(title="Recent Inbound Client Synchronizations", expand=True, border_style="dim")
             srv_table.add_column("Client IP:Port", style="bold white")
@@ -805,31 +877,29 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
             srv_table.add_column("Emitted T3", style="green")
             srv_table.add_column("Integrity", justify="center")
 
-            with state.lock:
-                for item in list(state.recent_server_logs):
-                    integrity = f"[bold white on red] ⚠️ FAKE ({item.get('skew', 60):+.0f}s) [/bold white on red]" if item.get("is_fake") else "[bold green]● VALID[/bold green]"
-                    srv_table.add_row(
-                        item["client"],
-                        VirtualClock.format_ts(item["t2"]),
-                        VirtualClock.format_ts(item["t3"]),
-                        integrity,
-                    )
+            for item in server_logs:
+                integrity = f"[bold white on red] [FAKE {item.get('skew', 60):+.0f}s] [/bold white on red]" if item.get("is_fake") else "[bold green][VALID][/bold green]"
+                srv_table.add_row(
+                    item["client"],
+                    VirtualClock.format_ts(item["t2"]),
+                    VirtualClock.format_ts(item["t3"]),
+                    integrity,
+                )
             layout["main"]["history"].update(Panel(srv_table, border_style="bright_yellow", title="Inbound Downstream Requests"))
         else:
             hist_table = Table(title="Convergence Rounds", expand=True, border_style="dim")
             hist_table.add_column("Time", style="dim", no_wrap=True)
             hist_table.add_column("Peer", style="white")
             hist_table.add_column("Mode", style="cyan")
-            hist_table.add_column("Offset (θ)", justify="right", style="bold yellow")
+            hist_table.add_column("Offset (theta)", justify="right", style="bold yellow")
 
-            with state.lock:
-                for h in list(state.sync_history):
-                    hist_table.add_row(
-                        VirtualClock.format_ts(h["time"]),
-                        h["peer"].split(":")[0],
-                        h["mode"],
-                        f"{h['theta_s']:+.4f}s",
-                    )
+            for h in history_logs:
+                hist_table.add_row(
+                    VirtualClock.format_ts(h["time"]),
+                    h["peer"].split(":")[0],
+                    h["mode"],
+                    f"{h['theta_s']:+.4f}s",
+                )
 
             layout["main"]["history"].update(Panel(hist_table, border_style="magenta", title="Sync History"))
 
@@ -837,10 +907,11 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
     layout["footer"].update(
         Panel(
             Align.center(
-                "[bold bright_yellow][F][/bold bright_yellow] Manual Falseticker (+60s)  |  "
-                "[bold magenta][C][/bold magenta] Auto Chaos (35% Glitches)  |  "
-                "[bold cyan][M][/bold cyan] Slew/Step Mode  |  "
-                "[bold green][D][/bold green] Random Drift (±ms/s)  |  "
+                "[bold white][SPACE][/bold white] Freeze/Pause UI  |  "
+                "[bold bright_yellow][F][/bold bright_yellow] Manual Falseticker  |  "
+                "[bold magenta][C][/bold magenta] Auto Chaos  |  "
+                "[bold cyan][M][/bold cyan] Slew/Step  |  "
+                "[bold green][D][/bold green] Dynamic Drift  |  "
                 "[bold red][Q][/bold red] Quit"
             ),
             border_style="dim",
@@ -858,23 +929,23 @@ def key_listener_worker(state: SharedState, clock: VirtualClock, stop_event: thr
             ch = reader.read_key(timeout=0.1)
             if not ch:
                 continue
-            key = ch.lower()
-            if key == "f":
-                state.toggle_falseticker()
-            elif key == "c":
-                state.toggle_chaos()
-            elif key == "m":
-                state.toggle_sync_mode()
-            elif key == "d":
-                new_drift = clock.toggle_drift()
-                with state.lock:
-                    if new_drift != 0.0:
-                        state.last_action_banner = f"Hardware Drift Active: {new_drift * 1000:+.1f} ms/s"
-                    else:
-                        state.last_action_banner = "Hardware Drift Disabled (0.0 ms/s)"
-            elif key == "q":
-                stop_event.set()
-                break
+            if ch == " ":
+                state.toggle_ui_pause(clock)
+            else:
+                key = ch.lower()
+                if key == "f":
+                    state.toggle_falseticker()
+                elif key == "c":
+                    state.toggle_chaos()
+                elif key == "m":
+                    state.toggle_sync_mode()
+                elif key == "d":
+                    active = clock.toggle_drift()
+                    with state.lock:
+                        state.last_action_banner = "Dynamic Brownian Drift Enabled" if active else "Drift Disabled"
+                elif key == "q":
+                    stop_event.set()
+                    break
     finally:
         reader.restore()
 
@@ -893,7 +964,7 @@ def parse_upstream(value: str) -> Tuple[str, int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="NTP Stratum Simulation Node (Enhanced Visual TUI with Fault Injection)")
+    parser = argparse.ArgumentParser(description="NTP Stratum Simulation Node (Clean Engineering TUI)")
     parser.add_argument("--stratum", type=int, required=True, choices=[1, 2, 3], help="Node stratum level (1, 2, or 3)")
     parser.add_argument("--port", type=int, default=5000, help="UDP port to listen on (Stratum 1 & 2, default: 5000)")
     parser.add_argument(
@@ -922,7 +993,7 @@ def main() -> None:
     stop_event = threading.Event()
     threads: list[threading.Thread] = []
 
-    # Start Clock Tick worker for drift and slewing
+    # Start Clock Tick worker for continuous dynamic drift and slewing
     ticker_thread = threading.Thread(target=clock_tick_worker, args=(clock, stop_event), daemon=True)
     ticker_thread.start()
     threads.append(ticker_thread)
@@ -956,14 +1027,15 @@ def main() -> None:
                 stop_event.set()
     else:
         print(f"=== NTP Node Started (Stratum {args.stratum}) | Node IP: {state.local_ip}:{state.port} ===")
-        print("Hotkeys: [F] Manual Falseticker | [C] Auto Chaos | [M] Slew/Step | [D] Drift | [Q] Quit")
+        print("Hotkeys: [SPACE] Freeze UI | [F] Manual Falseticker | [C] Auto Chaos | [M] Slew/Step | [D] Drift | [Q] Quit")
         try:
             while not stop_event.is_set():
-                drift_str = f"Drift: {clock.get_drift_rate() * 1000:+.1f}ms/s" if clock.get_drift_rate() != 0.0 else "Drift: OFF"
+                drift_str = f"Drift: {clock.get_drift_rate() * 1000:+.1f}ms/s" if clock.is_drift_active() else "Drift: OFF"
                 fake_info = f" (Broadcasted Fake: {VirtualClock.format_ts(clock.now() + state.falseticker_skew)})" if state.falseticker_mode else ""
+                paused_str = " [UI PAUSED]" if state.ui_paused else ""
                 print(
                     f"[{VirtualClock.format_ts(clock.now())}] Offset: {clock.get_offset():+.6f}s "
-                    f"| Mode: {state.sync_mode} | {drift_str} | Falseticker: {state.falseticker_mode}{fake_info}"
+                    f"| Mode: {state.sync_mode} | {drift_str} | Falseticker: {state.falseticker_mode}{fake_info}{paused_str}"
                 )
                 time.sleep(args.interval)
         except KeyboardInterrupt:
