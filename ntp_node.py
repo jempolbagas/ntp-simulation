@@ -186,7 +186,7 @@ class SharedState:
             self.sync_mode = "SLEW" if self.sync_mode == "STEP" else "STEP"
             return self.sync_mode
 
-    def record_server_request(self, client_addr: str, t2: float, t3: float) -> None:
+    def record_server_request(self, client_addr: str, t2: float, t3: float, is_fake: bool) -> None:
         with self.lock:
             self.server_req_count += 1
             self.recent_server_logs.append({
@@ -194,6 +194,7 @@ class SharedState:
                 "client": client_addr,
                 "t2": t2,
                 "t3": t3,
+                "is_fake": is_fake,
             })
 
     def update_peer_evaluations(self, reports: dict, chosen_peer: Optional[str]) -> None:
@@ -287,7 +288,7 @@ def run_server(clock: VirtualClock, state: SharedState, stop_event: threading.Ev
 
             sock.sendto(response, addr)
             client_id = f"{addr[0]}:{addr[1]}"
-            state.record_server_request(client_id, t2, t3)
+            state.record_server_request(client_id, t2, t3, is_fake=is_faulty)
     finally:
         sock.close()
 
@@ -348,25 +349,21 @@ def run_client(
             chosen_peer = None
 
             if len(responded_peers) == 1:
-                # Single peer available: no cross-validation possible
                 p_key = list(responded_peers.keys())[0]
                 responded_peers[p_key]["classification"] = "TRUECHIMER (Single)"
                 responded_peers[p_key]["action"] = "SELECTED"
                 chosen_peer = p_key
 
             elif len(responded_peers) >= 2:
-                # Multi-peer cross check: detect outliers (discrepancy > 5.0 seconds)
                 items = list(responded_peers.items())
                 thetas = [v["theta"] for _, v in items]
 
                 max_diff = max(thetas) - min(thetas)
                 if max_diff > 5.0:
-                    # Disagreement detected! Use consensus/past steady offset to isolate the liar
                     with state.lock:
                         baseline = state.prev_steady_offset
 
                     for p_key, data in items:
-                        # If baseline is known, compare against past steady offset; else use median
                         ref = baseline if baseline is not None else (sum(thetas) / len(thetas))
                         if abs(data["theta"] - ref) > 10.0:
                             data["classification"] = "⚠️ FALSETICKER"
@@ -375,21 +372,17 @@ def run_client(
                             data["classification"] = "● TRUECHIMER"
                             data["action"] = "CANDIDATE"
 
-                    # Pick candidate with minimum round-trip delay
                     truechimers = [k for k, v in items if v.get("classification") == "● TRUECHIMER"]
                     if truechimers:
                         chosen_peer = min(truechimers, key=lambda k: responded_peers[k]["delay"])
                         responded_peers[chosen_peer]["action"] = "SELECTED FOR SYNC"
                     else:
-                        # Fallback if baseline was skewed
                         chosen_peer = min(responded_peers.keys(), key=lambda k: responded_peers[k]["delay"])
                         responded_peers[chosen_peer]["action"] = "FALLBACK"
                 else:
-                    # All peers agree within tolerance -> all Truechimers
                     for _, data in items:
                         data["classification"] = "● TRUECHIMER"
                         data["action"] = "CANDIDATE"
-                    # Clock Filter: pick lowest delay
                     chosen_peer = min(responded_peers.keys(), key=lambda k: responded_peers[k]["delay"])
                     responded_peers[chosen_peer]["action"] = "SELECTED (Lowest Delay)"
 
@@ -496,6 +489,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
 
     with state.lock:
         is_falseticker = state.falseticker_mode
+        fault_skew = state.falseticker_skew
         sync_mode = state.sync_mode
 
     # 1. HEADER SECTION
@@ -506,9 +500,8 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
     }
     badge_title, border_color = stratum_badges.get(state.stratum, ("[UNKNOWN]", "white"))
 
-    # Status indicators
     if is_falseticker:
-        fault_badge = "[bold white on red] ⚠️ FALSETICKER MODE ACTIVE (+60s FAULT INJECTED) [/bold white on red]"
+        fault_badge = f"[bold white on red] ⚠️ FALSETICKER ACTIVE: BROADCASTING {VirtualClock.format_ts(now_virtual + fault_skew)} ({fault_skew:+.1f}s FAULT) [/bold white on red]"
     else:
         fault_badge = "[bold green]● HONEST TIME SERVER[/bold green]" if state.stratum in (1, 2) else "[dim]Client Node[/dim]"
 
@@ -526,33 +519,68 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
 
     # 2. CLOCKS & DRIFT SECTION
     clocks_table = Table.grid(expand=True)
-    clocks_table.add_column(justify="center", ratio=1)
-    clocks_table.add_column(justify="center", ratio=1)
-    clocks_table.add_column(justify="center", ratio=1)
 
-    offset_color = "bold green" if abs(current_offset) < 0.005 else ("yellow" if abs(current_offset) < 1.0 else "bold red")
-    offset_text = f"{current_offset:+.6f} s ({current_offset * 1000:+.2f} ms)"
+    if is_falseticker:
+        # 4 columns when Falseticker is active: OS Clock, Internal Virtual Clock, Broadcasted Fake Clock, Deviation
+        clocks_table.add_column(justify="center", ratio=1)
+        clocks_table.add_column(justify="center", ratio=1)
+        clocks_table.add_column(justify="center", ratio=1)
+        clocks_table.add_column(justify="center", ratio=1)
 
-    if abs(slew_rem) > 0.001:
-        offset_text += f"\n[bold cyan]Slewing left: {slew_rem:+.3f}s[/bold cyan]"
+        fake_ts = now_virtual + fault_skew
+        offset_text = f"{current_offset:+.6f}s"
 
-    clocks_table.add_row(
-        Panel(
-            Align.center(f"[bold cyan]{VirtualClock.format_ts(now_os)}[/bold cyan]\n[dim]OS Hardware Time[/dim]"),
-            title="[dim]Host Hardware[/dim]",
-            border_style="cyan",
-        ),
-        Panel(
-            Align.center(f"[bold bright_white]{VirtualClock.format_ts(now_virtual)}[/bold bright_white]\n[dim]Simulated Clock[/dim]"),
-            title="[bold]NTP Virtual Time[/bold]",
-            border_style=border_color,
-        ),
-        Panel(
-            Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n[dim]Offset (Virtual vs Host)[/dim]"),
-            title="[bold]Clock Deviation[/bold]",
-            border_style=offset_color,
-        ),
-    )
+        clocks_table.add_row(
+            Panel(
+                Align.center(f"[bold cyan]{VirtualClock.format_ts(now_os)}[/bold cyan]\n[dim]OS Hardware Time[/dim]"),
+                title="[dim]Host Hardware[/dim]",
+                border_style="cyan",
+            ),
+            Panel(
+                Align.center(f"[bold white]{VirtualClock.format_ts(now_virtual)}[/bold white]\n[dim]Internal Real Clock[/dim]"),
+                title="[bold]True Virtual Clock[/bold]",
+                border_style="white",
+            ),
+            Panel(
+                Align.center(f"[bold bright_white on red] {VirtualClock.format_ts(fake_ts)} [/bold bright_white on red]\n[bold red]Sent to Clients ({fault_skew:+.0f}s Fake)[/bold red]"),
+                title="[bold red]⚠️ Broadcasted Fake Time[/bold red]",
+                border_style="bold red",
+            ),
+            Panel(
+                Align.center(f"[bold yellow]{offset_text}[/bold yellow]\n[dim]Internal Offset[/dim]"),
+                title="[bold]Offset[/bold]",
+                border_style="yellow",
+            ),
+        )
+    else:
+        # Normal 3 columns: OS Clock, Virtual Clock, Offset
+        clocks_table.add_column(justify="center", ratio=1)
+        clocks_table.add_column(justify="center", ratio=1)
+        clocks_table.add_column(justify="center", ratio=1)
+
+        offset_color = "bold green" if abs(current_offset) < 0.005 else ("yellow" if abs(current_offset) < 1.0 else "bold red")
+        offset_text = f"{current_offset:+.6f} s ({current_offset * 1000:+.2f} ms)"
+
+        if abs(slew_rem) > 0.001:
+            offset_text += f"\n[bold cyan]Slewing left: {slew_rem:+.3f}s[/bold cyan]"
+
+        clocks_table.add_row(
+            Panel(
+                Align.center(f"[bold cyan]{VirtualClock.format_ts(now_os)}[/bold cyan]\n[dim]OS Hardware Time[/dim]"),
+                title="[dim]Host Hardware[/dim]",
+                border_style="cyan",
+            ),
+            Panel(
+                Align.center(f"[bold bright_white]{VirtualClock.format_ts(now_virtual)}[/bold bright_white]\n[dim]Simulated Clock[/dim]"),
+                title="[bold]NTP Virtual Time[/bold]",
+                border_style=border_color,
+            ),
+            Panel(
+                Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n[dim]Offset (Virtual vs Host)[/dim]"),
+                title="[bold]Clock Deviation[/bold]",
+                border_style=offset_color,
+            ),
+        )
 
     gauge_text = render_offset_gauge(current_offset)
     clock_box = Group(clocks_table, Align.center(gauge_text))
@@ -564,16 +592,25 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         srv_table = Table(title="Recent Inbound Client Synchronizations", expand=True, border_style="dim")
         srv_table.add_column("Timestamp", style="cyan", no_wrap=True)
         srv_table.add_column("Client IP:Port", style="bold white")
-        srv_table.add_column("T2 (Server Recv)", style="yellow")
-        srv_table.add_column("T3 (Server Send)", style="green")
+        srv_table.add_column("Emitted T2", style="yellow")
+        srv_table.add_column("Emitted T3", style="green")
+        srv_table.add_column("Integrity", justify="center")
 
         with state.lock:
             for item in list(state.recent_server_logs):
+                t2_str = VirtualClock.format_ts(item["t2"])
+                t3_str = VirtualClock.format_ts(item["t3"])
+                if item.get("is_fake"):
+                    integrity = "[bold white on red] ⚠️ FAKE (+60s) [/bold white on red]"
+                else:
+                    integrity = "[bold green]● VALID[/bold green]"
+
                 srv_table.add_row(
                     VirtualClock.format_ts(item["time"]),
                     item["client"],
-                    VirtualClock.format_ts(item["t2"]),
-                    VirtualClock.format_ts(item["t3"]),
+                    t2_str,
+                    t3_str,
+                    integrity,
                 )
 
         status_text = Text.from_markup(
@@ -616,23 +653,42 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
 
         layout["main"]["peers"].update(Panel(peer_table, border_style="dodger_blue1", title="Peer Cross-Validation"))
 
-        # History Table
-        hist_table = Table(title="Convergence Rounds", expand=True, border_style="dim")
-        hist_table.add_column("Time", style="dim", no_wrap=True)
-        hist_table.add_column("Peer", style="white")
-        hist_table.add_column("Mode", style="cyan")
-        hist_table.add_column("Offset (θ)", justify="right", style="bold yellow")
+        # History / Inbound Server table for Stratum 2
+        if state.stratum == 2 and state.server_req_count > 0:
+            srv_table = Table(title="Recent Inbound Client Synchronizations", expand=True, border_style="dim")
+            srv_table.add_column("Client IP:Port", style="bold white")
+            srv_table.add_column("Emitted T2", style="yellow")
+            srv_table.add_column("Emitted T3", style="green")
+            srv_table.add_column("Integrity", justify="center")
 
-        with state.lock:
-            for h in list(state.sync_history):
-                hist_table.add_row(
-                    VirtualClock.format_ts(h["time"]),
-                    h["peer"].split(":")[0],
-                    h["mode"],
-                    f"{h['theta_s']:+.4f}s",
-                )
+            with state.lock:
+                for item in list(state.recent_server_logs):
+                    integrity = "[bold white on red] ⚠️ FAKE [/bold white on red]" if item.get("is_fake") else "[bold green]● VALID[/bold green]"
+                    srv_table.add_row(
+                        item["client"],
+                        VirtualClock.format_ts(item["t2"]),
+                        VirtualClock.format_ts(item["t3"]),
+                        integrity,
+                    )
+            layout["main"]["history"].update(Panel(srv_table, border_style="bright_yellow", title="Inbound Downstream Requests"))
+        else:
+            # History Table for Leaf Clients
+            hist_table = Table(title="Convergence Rounds", expand=True, border_style="dim")
+            hist_table.add_column("Time", style="dim", no_wrap=True)
+            hist_table.add_column("Peer", style="white")
+            hist_table.add_column("Mode", style="cyan")
+            hist_table.add_column("Offset (θ)", justify="right", style="bold yellow")
 
-        layout["main"]["history"].update(Panel(hist_table, border_style="magenta", title="Sync History"))
+            with state.lock:
+                for h in list(state.sync_history):
+                    hist_table.add_row(
+                        VirtualClock.format_ts(h["time"]),
+                        h["peer"].split(":")[0],
+                        h["mode"],
+                        f"{h['theta_s']:+.4f}s",
+                    )
+
+            layout["main"]["history"].update(Panel(hist_table, border_style="magenta", title="Sync History"))
 
     # 4. FOOTER WITH HOTKEYS
     layout["footer"].update(
@@ -752,9 +808,10 @@ def main() -> None:
         print("Hotkeys: [F] Toggle Falseticker | [M] Toggle Slew/Step | [D] Toggle Drift | [Q] Quit")
         try:
             while not stop_event.is_set():
+                fake_info = f" (Broadcasted Fake: {VirtualClock.format_ts(clock.now() + state.falseticker_skew)})" if state.falseticker_mode else ""
                 print(
                     f"[{VirtualClock.format_ts(clock.now())}] Offset: {clock.get_offset():+.6f}s "
-                    f"| Mode: {state.sync_mode} | Falseticker: {state.falseticker_mode}"
+                    f"| Mode: {state.sync_mode} | Falseticker: {state.falseticker_mode}{fake_info}"
                 )
                 time.sleep(args.interval)
         except KeyboardInterrupt:
