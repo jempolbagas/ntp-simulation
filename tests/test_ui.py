@@ -102,16 +102,38 @@ class TestDashboard:
         assert s3.frozen_snapshot.offset == pytest.approx(1.5)
         assert s3.toggle_ui_pause(clock) is False
 
-    def test_dashboard_uses_upstream_theta_for_synced_stratum_gt_1(self):
+    def test_dashboard_uses_upstream_sync_for_stratum_gt_1(self):
         buf = io.StringIO()
         console = Console(file=buf, width=120, height=35)
         clock = VirtualClock(initial_offset=-2.5)
         s3 = SharedState(NodeConfig(stratum=3, port=5004, upstreams=["127.0.0.1:5002"]))
-        s3.record_sync(peer="127.0.0.1:5002", delay=0.004, theta=0.001, mode="STEP", before=100.0, after=100.001)
+        s3.record_sync(peer="127.0.0.1:5002", delay=0.004, theta=12.0, mode="STEP", before=100.0, after=112.0)
 
         console.print(build_dashboard(clock, s3))
         rendered = buf.getvalue()
         assert "Clock Deviation (vs Upstream)" in rendered
-        assert "+0.001000 s" in rendered
+        assert "+0.000000 s" in rendered
         assert "vs Host OS: -2.500s" in rendered
         assert "LOCKED (< 5ms)" in rendered
+
+    def test_dashboard_tracks_slew_and_falls_back_when_consensus_lost(self):
+        buf = io.StringIO()
+        console = Console(file=buf, width=120, height=35)
+        clock = VirtualClock(initial_offset=-2.5)
+        s3 = SharedState(NodeConfig(stratum=3, port=5004, upstreams=["127.0.0.1:5002"]))
+        clock.start_slew(1.5)
+        s3.record_sync(peer="127.0.0.1:5002", delay=0.004, theta=1.5, mode="SLEW", before=100.0, after=100.0)
+
+        console.print(build_dashboard(clock, s3))
+        rendered = buf.getvalue()
+        assert "+1.49" in rendered or "+1.50" in rendered
+        assert "LOCKED (< 5ms)" not in rendered
+        assert "+30s" in rendered
+
+        s3.update_peer_evaluations({}, chosen_peer=None)
+        buf.seek(0)
+        buf.truncate(0)
+        console.print(build_dashboard(clock, s3))
+        rendered = buf.getvalue()
+        assert "Delta (Virtual vs Host)" in rendered
+        assert "-2." in rendered

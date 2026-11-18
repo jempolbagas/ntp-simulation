@@ -386,6 +386,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         samples = snap.offset_samples
         tx = snap.tx_count
         rx = snap.rx_count
+        selected_peer = snap.selected_peer
     else:
         now_os = time.time()
         now_virtual = clock.now()
@@ -399,6 +400,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
             samples = list(state.offset_samples)
             tx = state.tx_count
             rx = state.rx_count
+            selected_peer = state.selected_peer
 
     # 1. HEADER SECTION
     stratum_badges = {
@@ -439,8 +441,11 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         Panel(header_table, border_style=border_color, title="[bold]Network Time Protocol Simulation Node[/bold]")
     )
 
-    has_upstream_sync = stratum > 1 and len(history_logs) > 0
-    display_offset = history_logs[0].theta_s if has_upstream_sync else current_offset
+    has_upstream_sync = stratum > 1 and selected_peer is not None and len(history_logs) > 0
+    if has_upstream_sync:
+        display_offset = slew_rem if abs(slew_rem) > 0.001 else 0.0
+    else:
+        display_offset = current_offset
 
     # 2. CLOCKS SECTION
     clocks_table = Table.grid(expand=True)
@@ -517,7 +522,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         spark_text = Text.from_markup(f"[dim]Convergence Trend:[/] [bold green]{spark}[/bold green] (Last {len(samples)} syncs)")
         slew_display_elements.append(spark_text)
 
-    gauge_text = render_offset_gauge(display_offset)
+    gauge_text = render_offset_gauge(current_offset if is_falseticker else display_offset)
     gauge_grid = Table.grid(expand=True)
     gauge_grid.add_column(justify="left", ratio=3)
     gauge_grid.add_column(justify="right", ratio=2)

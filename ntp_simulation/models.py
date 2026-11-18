@@ -271,6 +271,9 @@ class TelemetrySnapshot(BaseModel):
     peer_reports: Dict[str, PeerEvaluation] = Field(
         default_factory=dict, description="Peer evaluation reports"
     )
+    selected_peer: Optional[str] = Field(
+        default=None, description="Currently selected truechimer peer"
+    )
     server_logs: List[ServerLogEntry] = Field(
         default_factory=list, description="Recent server log entries"
     )

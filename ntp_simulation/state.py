@@ -201,6 +201,7 @@ class SharedState:
             slew_target=slew_target,
             slew_ratio=slew_ratio,
             peer_reports=dict(self.peer_reports),
+            selected_peer=self.selected_peer,
             server_logs=list(self.recent_server_logs),
             sync_history=list(self.sync_history),
             offset_samples=list(self.offset_samples),
