@@ -520,3 +520,39 @@ class TestSharedStateAndSnapshotIsolation:
         assert len(state.recent_server_logs) == 10
         assert len(state.sync_history) == 10
         assert len(state.offset_samples) == 30
+
+    def test_multi_hop_byzantine_quorum_rejects_falseticker(self):
+        """Verifies Stratum 3 leaf rejects a +60s falseticker Relay A and syncs to honest Relays B & C."""
+        from ntp_simulation.algorithms.marzullo import marzullo_evaluate
+
+        p_s2a, p_s2b, p_s2c = get_free_udp_port(), get_free_udp_port(), get_free_udp_port()
+        stop = threading.Event()
+        clk_honest = VirtualClock(initial_offset=0.0)
+
+        st_a = SharedState(NodeConfig(stratum=2, port=p_s2a, upstreams=["127.0.0.1:5001"]))
+        st_a.toggle_falseticker()
+        st_b = SharedState(NodeConfig(stratum=2, port=p_s2b, upstreams=["127.0.0.1:5001"]))
+        st_c = SharedState(NodeConfig(stratum=2, port=p_s2c, upstreams=["127.0.0.1:5001"]))
+
+        threads = [
+            threading.Thread(target=run_server, args=(clk_honest, st, stop, "127.0.0.1"), daemon=True)
+            for st in (st_a, st_b, st_c)
+        ]
+        for t in threads:
+            t.start()
+        time.sleep(0.05)
+
+        try:
+            clk_s3 = VirtualClock(initial_offset=12.0)
+            upstreams = [f"127.0.0.1:{p}" for p in (p_s2a, p_s2b, p_s2c)]
+            samples = poll_peers_concurrently(upstreams, clk_s3, timeout=1.0)
+            evaluations, chosen = marzullo_evaluate(list(samples.values()))
+
+            assert evaluations[f"127.0.0.1:{p_s2a}"].classification == "[FALSETICKER]"
+            assert chosen in (f"127.0.0.1:{p_s2b}", f"127.0.0.1:{p_s2c}")
+            clk_s3.step(evaluations[chosen].theta)
+            assert abs(clk_s3.get_offset()) < 0.05
+        finally:
+            stop.set()
+            for t in threads:
+                t.join(timeout=1.0)

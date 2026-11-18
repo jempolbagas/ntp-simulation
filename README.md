@@ -258,7 +258,7 @@ pytest tests/test_clock.py -v
 pytest tests/test_models.py -v
 pytest tests/test_network.py -v
 pytest tests/test_cli_cluster.py -v
-pytest tests/test_state_concurrency.py -v
+pytest tests/test_ui.py -v
 ```
 
 ### Cakupan Pengujian

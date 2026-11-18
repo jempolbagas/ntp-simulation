@@ -122,6 +122,17 @@ class TestClockSlewing:
         assert target == pytest.approx(-20.0)
         assert ratio == pytest.approx(0.08)
 
+    def test_negative_slew_monotonic_progression(self):
+        clock = VirtualClock(initial_offset=5.0, slew_rate=0.40)
+        clock.start_slew(-2.0)
+        last = clock.now()
+        for _ in range(25):
+            time.sleep(0.002)
+            clock.tick()
+            curr = clock.now()
+            assert curr >= last
+            last = curr
+
 
 class TestBrownianDrift:
     def test_drift_activation_and_deactivation(self):
