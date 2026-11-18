@@ -51,6 +51,7 @@ class NodeConfig(BaseModel):
     @model_validator(mode="after")
     def validate_upstreams_for_stratum(self) -> NodeConfig:
         """Enforces that non-master stratum nodes configure at least one upstream peer."""
+        self.upstreams = list(dict.fromkeys(self.upstreams))
         if self.stratum > 1 and not self.upstreams:
             raise ValueError(
                 f"Stratum {self.stratum} node requires at least one upstream peer"

@@ -297,24 +297,24 @@ def main(argv: Optional[List[str]] = None) -> None:
     stop_event = threading.Event()
     threads: List[threading.Thread] = []
 
-    # 1. Main-thread KeyReader instantiation (before any threads are created)
-    key_reader: Optional[KeyReader] = None
-    if not config.no_ui:
-        try:
-            key_reader = KeyReader()
-        except Exception:
-            key_reader = None
-
-    # 2. Main-thread signal handlers for graceful shutdown (SIGINT & SIGTERM)
+    # 1. Main-thread signal handlers for graceful shutdown (SIGINT & SIGTERM)
+    # Registered before KeyReader so KeyReader's handler chains to _handle_shutdown_signal
     def _handle_shutdown_signal(signum: int, frame: Any) -> None:
         stop_event.set()
-        raise KeyboardInterrupt()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             signal.signal(sig, _handle_shutdown_signal)
         except (ValueError, OSError):
             pass
+
+    # 2. Main-thread KeyReader instantiation (before any threads are created)
+    key_reader: Optional[KeyReader] = None
+    if not config.no_ui:
+        try:
+            key_reader = KeyReader()
+        except Exception:
+            key_reader = None
 
     # 3. Clock tick worker (slewing & Brownian drift integration at 25 Hz)
     def clock_ticker() -> None:

@@ -112,6 +112,15 @@ class TestClockSlewing:
         assert target == 0.0
         assert ratio == 1.0
 
+    def test_repeated_start_slew_replaces_remaining_target(self):
+        clock = VirtualClock(initial_offset=20.0, slew_rate=0.40)
+        clock.start_slew(-20.0)
+        clock.tick(dt=4.0)  # slewed -1.6s, remaining -18.4s
+        clock.start_slew(-18.4)
+        rem, target, _ = clock.get_slew_info()
+        assert rem == pytest.approx(-18.4)
+        assert target == pytest.approx(-18.4)
+
 
 class TestBrownianDrift:
     def test_drift_activation_and_deactivation(self):

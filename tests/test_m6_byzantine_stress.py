@@ -388,14 +388,6 @@ class TestLiveSubprocessHierarchyDeployment:
 class TestClockStepSlewTransitionsAndMonotonicity:
     """Stress tests clock monotonicity and transition stability between STEP and SLEW."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: VirtualClock.now() exhibits backward time inversions up to 16ms during "
-            "negative slewing due to discrete tick offset decrements without continuous interpolation "
-            "or monotonicity clamping."
-        ),
-    )
     def test_slew_strict_monotonicity_under_negative_adjustment(self):
         """When clock is slewed backwards (-20.0s), virtual time must NEVER go backwards.
         Since slew rate is 0.40 s/s (< 1.00 s/s), elapsed real time dt produces

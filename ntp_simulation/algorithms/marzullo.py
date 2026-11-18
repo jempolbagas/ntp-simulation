@@ -103,14 +103,14 @@ def marzullo_intersection(
         MarzulloResult with classified truechimers, falsetickers, consensus interval,
         and selected synchronization candidate.
     """
-    n = len(samples)
-    if n == 0:
-        return MarzulloResult()
-
-    extracted: List[Tuple[str, float, float, Any]] = []
+    deduped: Dict[str, Tuple[str, float, float, Any]] = {}
     for s in samples:
         pid, theta, delay = _extract_sample_data(s)
-        extracted.append((pid, theta, delay, s))
+        deduped[pid] = (pid, theta, delay, s)
+    extracted: List[Tuple[str, float, float, Any]] = list(deduped.values())
+    n = len(extracted)
+    if n == 0:
+        return MarzulloResult()
 
     if n == 1:
         pid, theta, delay, _ = extracted[0]

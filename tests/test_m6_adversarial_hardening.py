@@ -457,11 +457,9 @@ class TestVirtualClockExtremeEdgeCasesAndMonotonicity:
 
         assert len(monotonicity_violations) == 0, f"Monotonicity violated under positive slew: {monotonicity_violations[:5]}"
 
-    def test_negative_slew_discrete_tick_jump_behavior(self):
-        """Empirically characterizes the discrete simulation mechanics of VirtualClock:
-        Because now() = time.time() + self._offset (PROJECT.md:24), and tick() decrements
-        _offset by (slew_rate * elapsed) at discrete intervals, a negative slew causes an
-        instantaneous backward step of approx -(slew_rate * elapsed) at each tick.
+    def test_negative_slew_continuous_monotonic_progression(self):
+        """Verifies that VirtualClock.now() interpolates negative slewing continuously
+        so that neither now() nor tick() causes a backward jump in virtual time.
         """
         clock = VirtualClock(initial_offset=5.0, slew_rate=0.40)
         clock.start_slew(-2.0)  # Negative slew: target -2.0s
@@ -470,17 +468,13 @@ class TestVirtualClockExtremeEdgeCasesAndMonotonicity:
         time.sleep(0.04)  # 40 ms elapsed wall time
         t_before_tick = clock.now()
 
-        # Before tick, virtual time advanced naturally with wall clock time
+        # Virtual time advances at (1.0 - 0.40) = +0.60 s/s during negative slew
         assert t_before_tick > t_start
 
-        # Execute tick: adjusts offset by -(0.40 * elapsed)
+        # Execute tick: must not jump backwards because now() already integrated elapsed time
         clock.tick()
         t_after_tick = clock.now()
-
-        # Due to discrete offset decrement, t_after_tick drops backwards by approx 0.40 * 0.040s = 0.016s
-        jump = t_after_tick - t_before_tick
-        assert jump < 0.0, f"Expected discrete backward drop on negative slew tick, got {jump:+.6f}"
-        assert pytest.approx(-0.016, abs=0.008) == jump
+        assert t_after_tick >= t_before_tick
 
 
     def test_microsecond_step_adjustments(self):

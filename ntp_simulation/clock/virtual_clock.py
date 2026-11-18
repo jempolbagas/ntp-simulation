@@ -72,7 +72,11 @@ class VirtualClock:
     def now(self) -> float:
         """Returns current virtual time (system time + offset) under lock."""
         with self._lock:
-            return time.time() + self._offset
+            now_ts = time.time()
+            elapsed = now_ts - self._last_tick
+            if elapsed > 0.0:
+                self._advance_locked(now_ts, elapsed)
+            return now_ts + self._offset
 
     def get_offset(self) -> float:
         """Returns current clock offset relative to OS clock in seconds."""
@@ -97,8 +101,41 @@ class VirtualClock:
             delta: Total time adjustment in seconds to slew gradually.
         """
         with self._lock:
-            self._slew_remaining += float(delta)
+            self._slew_remaining = float(delta)
             self._slew_total_target = self._slew_remaining
+
+    def _advance_locked(self, now: float, elapsed: float) -> None:
+        """Integrates Brownian drift and active slew over elapsed seconds (caller holds _lock)."""
+        self._last_tick = now
+        if elapsed <= 0.0:
+            return
+
+        # 1. Brownian quartz drift simulation
+        if self._drift_active:
+            if (now - self._last_drift_shift > self._drift_shift_interval) or (self._last_drift_shift > now):
+                self._drift_target += random.uniform(-0.006, 0.006)
+                self._drift_target = max(
+                    -self._max_drift_target,
+                    min(self._max_drift_target, self._drift_target),
+                )
+                self._last_drift_shift = now
+
+            # Exponential relaxation toward target drift: dD/dt = kappa * (target - D)
+            drift_step = (self._drift_target - self._drift_rate) * min(1.0, elapsed * 2.0)
+            self._drift_rate += drift_step
+            self._offset += self._drift_rate * elapsed
+
+        # 2. Slewing rate-limited adjustment
+        if self._slew_remaining != 0.0:
+            max_step = self._slew_rate * elapsed
+            if abs(self._slew_remaining) <= max_step:
+                self._offset += self._slew_remaining
+                self._slew_remaining = 0.0
+                self._slew_total_target = 0.0
+            else:
+                step = math.copysign(max_step, self._slew_remaining)
+                self._offset += step
+                self._slew_remaining -= step
 
     def tick(self, now_real: Optional[float] = None, dt: Optional[float] = None) -> None:
         """Advances clock: integrates Brownian drift and steps active slew.
@@ -125,37 +162,7 @@ class VirtualClock:
                 now = time.time()
                 elapsed = max(0.0, now - self._last_tick)
 
-            self._last_tick = now
-
-            if elapsed <= 0.0:
-                return
-
-            # 1. Brownian quartz drift simulation
-            if self._drift_active:
-                if (now - self._last_drift_shift > self._drift_shift_interval) or (self._last_drift_shift > now):
-                    self._drift_target += random.uniform(-0.006, 0.006)
-                    self._drift_target = max(
-                        -self._max_drift_target,
-                        min(self._max_drift_target, self._drift_target),
-                    )
-                    self._last_drift_shift = now
-
-                # Exponential relaxation toward target drift: dD/dt = kappa * (target - D)
-                drift_step = (self._drift_target - self._drift_rate) * min(1.0, elapsed * 2.0)
-                self._drift_rate += drift_step
-                self._offset += self._drift_rate * elapsed
-
-            # 2. Slewing rate-limited adjustment
-            if self._slew_remaining != 0.0:
-                max_step = self._slew_rate * elapsed
-                if abs(self._slew_remaining) <= max_step:
-                    self._offset += self._slew_remaining
-                    self._slew_remaining = 0.0
-                    self._slew_total_target = 0.0
-                else:
-                    step = math.copysign(max_step, self._slew_remaining)
-                    self._offset += step
-                    self._slew_remaining -= step
+            self._advance_locked(now, elapsed)
 
     def get_slew_info(self) -> Tuple[float, float, float]:
         """Returns slewing progress tuple: (remaining_slew, total_target_slew, progress_ratio).
