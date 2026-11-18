@@ -439,6 +439,9 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         Panel(header_table, border_style=border_color, title="[bold]Network Time Protocol Simulation Node[/bold]")
     )
 
+    has_upstream_sync = stratum > 1 and len(history_logs) > 0
+    display_offset = history_logs[0].theta_s if has_upstream_sync else current_offset
+
     # 2. CLOCKS SECTION
     clocks_table = Table.grid(expand=True)
     if is_falseticker:
@@ -475,8 +478,14 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         clocks_table.add_column(justify="center", ratio=1)
         clocks_table.add_column(justify="center", ratio=1)
 
-        offset_color = "bold green" if abs(current_offset) < 0.005 else ("yellow" if abs(current_offset) < 1.0 else "bold red")
-        offset_text = f"{current_offset:+.6f} s ({current_offset * 1000:+.2f} ms)"
+        offset_color = "bold green" if abs(display_offset) < 0.005 else ("yellow" if abs(display_offset) < 1.0 else "bold red")
+        offset_text = f"{display_offset:+.6f} s ({display_offset * 1000:+.2f} ms)"
+        if has_upstream_sync:
+            dev_title = "[bold]Clock Deviation (vs Upstream)[/bold]"
+            dev_subtitle = f"[dim]Sync theta | vs Host OS: {current_offset:+.3f}s[/dim]"
+        else:
+            dev_title = "[bold]Clock Deviation[/bold]"
+            dev_subtitle = "[dim]Delta (Virtual vs Host)[/dim]"
 
         clocks_table.add_row(
             Panel(
@@ -490,8 +499,8 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
                 border_style=border_color,
             ),
             Panel(
-                Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n[dim]Delta (Virtual vs Host)[/dim]"),
-                title="[bold]Clock Deviation[/bold]",
+                Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n{dev_subtitle}"),
+                title=dev_title,
                 border_style=offset_color,
             ),
         )
@@ -508,7 +517,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         spark_text = Text.from_markup(f"[dim]Convergence Trend:[/] [bold green]{spark}[/bold green] (Last {len(samples)} syncs)")
         slew_display_elements.append(spark_text)
 
-    gauge_text = render_offset_gauge(current_offset)
+    gauge_text = render_offset_gauge(display_offset)
     gauge_grid = Table.grid(expand=True)
     gauge_grid.add_column(justify="left", ratio=3)
     gauge_grid.add_column(justify="right", ratio=2)

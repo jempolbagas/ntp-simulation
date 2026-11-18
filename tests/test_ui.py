@@ -101,3 +101,17 @@ class TestDashboard:
         console.print(build_dashboard(clock, s3))
         assert s3.frozen_snapshot.offset == pytest.approx(1.5)
         assert s3.toggle_ui_pause(clock) is False
+
+    def test_dashboard_uses_upstream_theta_for_synced_stratum_gt_1(self):
+        buf = io.StringIO()
+        console = Console(file=buf, width=120, height=35)
+        clock = VirtualClock(initial_offset=-2.5)
+        s3 = SharedState(NodeConfig(stratum=3, port=5004, upstreams=["127.0.0.1:5002"]))
+        s3.record_sync(peer="127.0.0.1:5002", delay=0.004, theta=0.001, mode="STEP", before=100.0, after=100.001)
+
+        console.print(build_dashboard(clock, s3))
+        rendered = buf.getvalue()
+        assert "Clock Deviation (vs Upstream)" in rendered
+        assert "+0.001000 s" in rendered
+        assert "vs Host OS: -2.500s" in rendered
+        assert "LOCKED (< 5ms)" in rendered
