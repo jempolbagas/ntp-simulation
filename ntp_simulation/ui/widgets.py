@@ -1,7 +1,8 @@
 """Unicode sparklines, offset gauge meter, and topology diagrams."""
 from __future__ import annotations
 
-from typing import Sequence
+import math
+from typing import List, Optional, Sequence
 from rich.text import Text
 
 
@@ -17,17 +18,18 @@ def generate_sparkline(values: Sequence[float], width: int = 16) -> str:
     """
     if width <= 0:
         return ""
-    if not values:
+    finite = [float(v) for v in values if v is not None and math.isfinite(float(v))]
+    if not finite:
         return " " * width
 
     bars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-    trimmed = list(values)[-width:]
-    abs_vals = [abs(float(v)) for v in trimmed]
+    trimmed = finite[-width:]
+    abs_vals = [abs(v) for v in trimmed]
     max_val = max(abs_vals) if abs_vals and max(abs_vals) > 0.0 else 1.0
 
     result = []
     for v in trimmed:
-        ratio = min(1.0, abs(float(v)) / max_val)
+        ratio = min(1.0, abs(v) / max_val)
         idx = int(ratio * (len(bars) - 1))
         result.append(bars[idx])
 
@@ -45,10 +47,11 @@ def render_offset_gauge(offset: float, width: int = 36) -> Text:
     Returns:
         Rich Text instance displaying needle position and color-coded status badge.
     """
-    abs_val = abs(float(offset))
+    raw_offset = float(offset)
+    abs_val = abs(raw_offset)
     gauge = Text()
 
-    if abs_val > 1.0:
+    if not math.isfinite(raw_offset) or abs_val > 1.0:
         max_bound = 30.0
         label_l, label_r = "-30s", "+30s"
     elif abs_val > 0.05:
@@ -59,8 +62,11 @@ def render_offset_gauge(offset: float, width: int = 36) -> Text:
         label_l, label_r = "-50ms", "+50ms"
 
     half_w = width // 2
-    clamped_offset = max(-max_bound, min(max_bound, float(offset)))
-    pos = int((clamped_offset / max_bound) * half_w)
+    if not math.isfinite(raw_offset):
+        pos = half_w if raw_offset > 0 else (-half_w if raw_offset < 0 else 0)
+    else:
+        clamped_offset = max(-max_bound, min(max_bound, raw_offset))
+        pos = int((clamped_offset / max_bound) * half_w)
 
     bar_chars = []
     for i in range(-half_w, half_w + 1):
@@ -137,12 +143,10 @@ def render_line_chart(
     Returns:
         Rich Text instance containing the styled multi-line terminal line chart.
     """
-    import math
-
     valid_vals = [
         float(v)
         for v in values
-        if v is not None and not (math.isnan(float(v)) or math.isinf(float(v)))
+        if v is not None and math.isfinite(float(v))
     ]
     if not valid_vals:
         valid_vals = [0.0]

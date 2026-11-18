@@ -223,7 +223,7 @@ class SharedState:
 
     def record_sync(
         self,
-        *args: Any,
+        *,
         peer: Optional[str] = None,
         peer_name: Optional[str] = None,
         delay_ms: Optional[float] = None,
@@ -239,33 +239,9 @@ class SharedState:
         t2: Optional[float] = None,
         t3: Optional[float] = None,
         t4: Optional[float] = None,
-        **kwargs: Any,
     ) -> None:
-        """Records clock adjustment event, updating synchronization telemetry and history.
-
-        Accepts both positional and keyword argument variations:
-        - (peer, delay_ms, theta_s, mode, before, after)
-        - (peer_name, delay, theta, mode, before_ts, after_ts)
-        - (t1, t2, t3, t4, delay, theta, peer_name, before_ts, after_ts, mode)
-        """
+        """Records clock adjustment event, updating synchronization telemetry and history."""
         with self.lock:
-            # Handle positional parameter mappings
-            if len(args) == 10:
-                t1, t2, t3, t4, delay, theta, peer_name, before_ts, after_ts, mode = args
-            elif len(args) == 6:
-                p_arg, d_arg, th_arg, m_arg, b_arg, a_arg = args
-                peer = str(p_arg)
-                mode = str(m_arg)
-                # Check whether d_arg is in ms or seconds
-                if delay_ms is None and delay is None:
-                    if float(d_arg) >= 1.0 or "delay_ms" in kwargs:
-                        delay_ms = float(d_arg)
-                    else:
-                        delay = float(d_arg)
-                theta_s = float(th_arg)
-                before = float(b_arg)
-                after = float(a_arg)
-
             resolved_peer = peer_name or peer or self.selected_peer or "unknown"
             resolved_mode = mode or self.sync_mode
 
@@ -348,13 +324,6 @@ class SharedState:
         now_virtual = clock.now()
         slew_rem, slew_target, slew_ratio = clock.get_slew_info()
 
-        validated_reports: Dict[str, PeerEvaluation] = {}
-        for k, v in self.peer_reports.items():
-            if isinstance(v, PeerEvaluation):
-                validated_reports[k] = v
-            elif isinstance(v, dict):
-                validated_reports[k] = PeerEvaluation(**v)
-
         return TelemetrySnapshot(
             pause_time=now_os,
             now_os=now_os,
@@ -364,7 +333,7 @@ class SharedState:
             slew_rem=slew_rem,
             slew_target=slew_target,
             slew_ratio=slew_ratio,
-            peer_reports=validated_reports,
+            peer_reports=dict(self.peer_reports),
             server_logs=list(self.recent_server_logs),
             sync_history=list(self.sync_history),
             offset_samples=list(self.offset_samples),

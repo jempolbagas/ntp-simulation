@@ -139,8 +139,12 @@ def poll_peers_concurrently(
         else:
             raise TypeError(f"Unsupported peer address type in list: {type(p)}")
 
+    if len(parsed_peers) == 1:
+        peer = parsed_peers[0]
+        return {peer.key: poll_peer(peer, clock, timeout, client_id)}
+
     results: Dict[str, PeerSample] = {}
-    workers = min(max_workers, max(1, len(parsed_peers)))
+    workers = min(max_workers, len(parsed_peers))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_peer = {

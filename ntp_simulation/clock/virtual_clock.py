@@ -141,7 +141,7 @@ class VirtualClock:
         """Advances clock: integrates Brownian drift and steps active slew.
 
         Args:
-            now_real: Optional wall-clock timestamp or delta for deterministic testing.
+            now_real: Optional wall-clock timestamp for deterministic testing.
             dt: Optional explicit elapsed time delta in seconds.
         """
         with self._lock:
@@ -149,15 +149,8 @@ class VirtualClock:
                 elapsed = max(0.0, float(dt))
                 now = self._last_tick + elapsed
             elif now_real is not None:
-                now_val = float(now_real)
-                # If caller passed a small relative dt positionally (< 10000.0)
-                # while _last_tick is set to epoch time (> 10000.0)
-                if now_val < 10000.0 and self._last_tick > 10000.0:
-                    elapsed = max(0.0, now_val)
-                    now = self._last_tick + elapsed
-                else:
-                    now = now_val
-                    elapsed = max(0.0, now - self._last_tick)
+                now = float(now_real)
+                elapsed = max(0.0, now - self._last_tick)
             else:
                 now = time.time()
                 elapsed = max(0.0, now - self._last_tick)

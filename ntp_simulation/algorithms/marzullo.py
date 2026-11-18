@@ -296,18 +296,20 @@ def marzullo_evaluate(
     reports: Dict[str, PeerEvaluation] = {}
     responded_samples: List[Any] = []
 
+    def _meta(s: Any) -> Tuple[str, Optional[int], Optional[float], Optional[float], Optional[float], Optional[float]]:
+        get = (lambda k, d=None: s.get(k, d)) if isinstance(s, dict) else (lambda k, d=None: getattr(s, k, d))
+        return (
+            get("status", "RESPONDED"),
+            get("server_stratum"),
+            get("t1"),
+            get("t2"),
+            get("t3"),
+            get("t4"),
+        )
+
     for s in samples:
         pid, theta, delay = _extract_sample_data(s)
-        status = getattr(s, "status", "RESPONDED") if hasattr(s, "status") else (
-            s.get("status", "RESPONDED") if isinstance(s, dict) else "RESPONDED"
-        )
-        server_stratum = getattr(s, "server_stratum", None) if hasattr(s, "server_stratum") else (
-            s.get("server_stratum") if isinstance(s, dict) else None
-        )
-        t1 = getattr(s, "t1", None) if hasattr(s, "t1") else (s.get("t1") if isinstance(s, dict) else None)
-        t2 = getattr(s, "t2", None) if hasattr(s, "t2") else (s.get("t2") if isinstance(s, dict) else None)
-        t3 = getattr(s, "t3", None) if hasattr(s, "t3") else (s.get("t3") if isinstance(s, dict) else None)
-        t4 = getattr(s, "t4", None) if hasattr(s, "t4") else (s.get("t4") if isinstance(s, dict) else None)
+        status, server_stratum, t1, t2, t3, t4 = _meta(s)
 
         if status == "RESPONDED":
             responded_samples.append(s)
@@ -334,13 +336,7 @@ def marzullo_evaluate(
 
     for s in responded_samples:
         pid, theta, delay = _extract_sample_data(s)
-        server_stratum = getattr(s, "server_stratum", None) if hasattr(s, "server_stratum") else (
-            s.get("server_stratum") if isinstance(s, dict) else None
-        )
-        t1 = getattr(s, "t1", None) if hasattr(s, "t1") else (s.get("t1") if isinstance(s, dict) else None)
-        t2 = getattr(s, "t2", None) if hasattr(s, "t2") else (s.get("t2") if isinstance(s, dict) else None)
-        t3 = getattr(s, "t3", None) if hasattr(s, "t3") else (s.get("t3") if isinstance(s, dict) else None)
-        t4 = getattr(s, "t4", None) if hasattr(s, "t4") else (s.get("t4") if isinstance(s, dict) else None)
+        _, server_stratum, t1, t2, t3, t4 = _meta(s)
 
         status_info = result.peer_status.get(pid, {})
         classification = status_info.get("classification", "[UNKNOWN]")

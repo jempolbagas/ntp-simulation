@@ -3,8 +3,8 @@
 ## Verification Summary
 - **Test Suite Status**: READY & ACTIVE
 - **Test Suite Framework**: `pytest 9.1.1`
-- **Current Milestone**: Core Foundation (M1) Verified; Downstream Tiers Guarded (M2, M4, M5)
-- **Active Results**: 49 passed, 2 skipped (waiting for M2 and M4/M5 modules)
+- **Current Milestone**: All Milestones (M1–M6) Verified
+- **Active Results**: 201 passed, 0 skipped, 0 xfailed
 
 ---
 
@@ -26,15 +26,20 @@ pytest tests/ -v
 | 2 | Peer Models & NodeConfig Validation | `tests/test_models.py` | 15 | ✅ PASSING |
 | 3 | Marzullo Confidence Interval Construction | `tests/test_marzullo.py` | 3 | ✅ PASSING |
 | 4 | Sweep-Line Intersection Table Sorting | `tests/test_marzullo.py` | 2 | ✅ PASSING |
-| 5 | Falseticker Outlier Rejection (1, 2, 3, 5 peers) | `tests/test_marzullo.py` | 8 | ✅ PASSING |
+| 5 | Falseticker Outlier Rejection (1, 2, 3, 5 peers) | `tests/test_marzullo.py` | 11 | ✅ PASSING |
 | 6 | Truechimer Candidate Selection & Tie-Breaks | `tests/test_marzullo.py` | 4 | ✅ PASSING |
-| 7 | VirtualClock Time Calculation (`now()`) | `tests/test_clock.py` | 2 | ⏳ READY (M2) |
-| 8 | Clock Step Dynamics (Instant Jump & Slew Reset) | `tests/test_clock.py` | 2 | ⏳ READY (M2) |
-| 9 | Clock Slew Dynamics (Rate-Limited 0.40s/s) | `tests/test_clock.py` | 3 | ⏳ READY (M2) |
-| 10 | Brownian Quartz Drift Bounds & Smoothing | `tests/test_clock.py` | 2 | ⏳ READY (M2) |
-| 11 | VirtualClock Multi-Threaded Concurrency | `tests/test_clock.py` | 1 | ⏳ READY (M2) |
-| 12 | CLI Option Parsing (`--stratum`, `--port`, etc.) | `tests/test_cli_cluster.py` | 8 | ⏳ READY (M4) |
-| 13 | Local Cluster Tmux Runner Validation | `tests/test_cli_cluster.py` | 2 | ⏳ READY (M5) |
+| 7 | VirtualClock Time Calculation (`now()`) | `tests/test_clock.py` | 2 | ✅ PASSING |
+| 8 | Clock Step Dynamics (Instant Jump & Slew Reset) | `tests/test_clock.py` | 2 | ✅ PASSING |
+| 9 | Clock Slew Dynamics (Rate-Limited 0.40s/s) | `tests/test_clock.py` | 4 | ✅ PASSING |
+| 10 | Brownian Quartz Drift Bounds & Smoothing | `tests/test_clock.py` | 2 | ✅ PASSING |
+| 11 | VirtualClock Multi-Threaded Concurrency | `tests/test_clock.py` | 1 | ✅ PASSING |
+| 12 | CLI Option Parsing (`--stratum`, `--port`, etc.) | `tests/test_cli_cluster.py` | 8 | ✅ PASSING |
+| 13 | Local Cluster Tmux Runner Validation | `tests/test_cli_cluster.py` | 2 | ✅ PASSING |
+| 14 | Network UDP Client/Server, Nonce, Fault Injection | `tests/test_network.py` | 17 | ✅ PASSING |
+| 15 | SharedState Concurrency & Snapshot Isolation | `tests/test_state_concurrency.py` | 8 | ✅ PASSING |
+| 16 | KeyReader PTY & TUI Dashboard Adversarial | `tests/test_m4_adversarial.py` | 77 | ✅ PASSING |
+| 17 | Datagram Fuzzing & 50-Thread Hardening | `tests/test_m6_adversarial_hardening.py` | 17 | ✅ PASSING |
+| 18 | Multi-Hop Live Hierarchy & Byzantine Stress | `tests/test_m6_byzantine_stress.py` | 7 | ✅ PASSING |
 
 ---
 
