@@ -19,6 +19,7 @@ Simulasi **Network Time Protocol (RFC 5905)** berbasis arsitektur **Hierarki Str
 - [Local Cluster Runner (tmux)](#local-cluster-runner-tmux)
 - [Hotkey Interaktif & Fault Injection](#hotkey-interaktif--fault-injection)
 - [Pengujian & Verifikasi (Pytest)](#pengujian--verifikasi-pytest)
+- [Penjelasan Bottom-Up (Protokol, Algoritma, & Simulasi)](docs/HOW_IT_WORKS.md)
 
 ---
 
