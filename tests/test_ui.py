@@ -10,6 +10,7 @@ import pytest
 from rich.console import Console
 
 from ntp_simulation.clock.virtual_clock import VirtualClock
+from ntp_simulation.models.config import NodeConfig
 from ntp_simulation.models.peer import PeerEvaluation
 from ntp_simulation.models.telemetry import ServerLogEntry
 from ntp_simulation.state import SharedState
@@ -80,14 +81,14 @@ class TestDashboard:
         clock = VirtualClock(initial_offset=1.5)
 
         # Stratum 1 with server log
-        s1 = SharedState(stratum=1, port=5001)
+        s1 = SharedState(NodeConfig(stratum=1, port=5001))
         s1.recent_server_logs.append(
             ServerLogEntry(time=100.0, client="127.0.0.1:5002", t2=100.1, t3=100.2, is_fake=True, skew=60.0)
         )
         console.print(build_dashboard(clock, s1))
 
         # Stratum 3 with peer evaluations and UI freeze
-        s3 = SharedState(stratum=3, port=5004)
+        s3 = SharedState(NodeConfig(stratum=3, port=5004, upstreams=["127.0.0.1:5002"]))
         s3.peer_reports["127.0.0.1:5002"] = PeerEvaluation(
             peer_key="127.0.0.1:5002",
             stratum=2,

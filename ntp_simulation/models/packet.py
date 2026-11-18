@@ -19,14 +19,6 @@ class NTPRequest(BaseModel):
     nonce: str = Field(..., min_length=8, description="Random correlation nonce")
     client_id: Optional[str] = Field(default=None, description="Optional client identifier")
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if args:
-            field_names = ["t1", "nonce", "client_id"]
-            for i, val in enumerate(args):
-                if i < len(field_names):
-                    kwargs.setdefault(field_names[i], val)
-        super().__init__(**kwargs)
-
     @classmethod
     def create(
         cls,
@@ -73,23 +65,6 @@ class NTPResponse(BaseModel):
     server_id: Optional[str] = Field(default=None, description="Server identifier host:port")
     is_falseticker: bool = Field(default=False, description="Fault injection status")
     skew_applied: float = Field(default=0.0, description="Skew applied in seconds")
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if args:
-            field_names = [
-                "t1",
-                "t2",
-                "t3",
-                "nonce",
-                "server_stratum",
-                "server_id",
-                "is_falseticker",
-                "skew_applied",
-            ]
-            for i, val in enumerate(args):
-                if i < len(field_names):
-                    kwargs.setdefault(field_names[i], val)
-        super().__init__(**kwargs)
 
     def to_bytes(self) -> bytes:
         """Serializes model to UTF-8 encoded JSON bytes for UDP transmission."""

@@ -186,12 +186,12 @@ def client_worker(
 
                 after_ts = clock.now()
                 state.record_sync(
-                    peer_name=chosen_peer,
+                    peer=chosen_peer,
                     delay=target_eval.delay,
                     theta=theta_val,
                     mode=mode,
-                    before_ts=before_ts,
-                    after_ts=after_ts,
+                    before=before_ts,
+                    after=after_ts,
                 )
 
         stop_event.wait(interval)

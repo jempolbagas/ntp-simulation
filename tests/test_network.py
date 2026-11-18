@@ -509,8 +509,8 @@ class TestSharedStateAndSnapshotIsolation:
             state.record_server_request(f"client-{i}", 100.0 + i, 100.1 + i)
             state.record_sync(
                 peer=f"peer-{i}",
-                delay_ms=2.5,
-                theta_s=0.001,
+                delay=0.0025,
+                theta=0.001,
                 mode="STEP",
                 before=10.0,
                 after=10.001,

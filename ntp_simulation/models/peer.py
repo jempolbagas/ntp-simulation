@@ -13,17 +13,11 @@ class PeerAddress(BaseModel):
     host: str = Field(..., min_length=1, description="IP address or hostname")
     port: int = Field(..., ge=1, le=65535, description="UDP port number")
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if args:
-            if len(args) == 1 and isinstance(args[0], str) and ":" in args[0]:
-                h, p = args[0].rsplit(":", 1)
-                kwargs.setdefault("host", h)
-                kwargs.setdefault("port", int(p))
-            else:
-                field_names = ["host", "port"]
-                for i, val in enumerate(args):
-                    if i < len(field_names):
-                        kwargs.setdefault(field_names[i], val)
+    def __init__(self, host: Optional[str] = None, port: Optional[int] = None, **kwargs: Any) -> None:
+        if host is not None:
+            kwargs.setdefault("host", host)
+        if port is not None:
+            kwargs.setdefault("port", port)
         super().__init__(**kwargs)
 
     @property
@@ -64,41 +58,6 @@ class PeerSample(BaseModel):
     server_stratum: Optional[int] = Field(default=1, alias="stratum")
     nonce_matched: bool = True
     status: str = "RESPONDED"  # RESPONDED, TIMEOUT, NONCE_MISMATCH, ERROR: ...
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if args:
-            first = args[0]
-            if isinstance(first, str):
-                if ":" in first:
-                    try:
-                        kwargs.setdefault("peer", PeerAddress.parse(first))
-                    except Exception:
-                        kwargs.setdefault("peer_id", first)
-                else:
-                    kwargs.setdefault("peer_id", first)
-            elif isinstance(first, PeerAddress):
-                kwargs.setdefault("peer", first)
-
-            if len(args) == 3:
-                # (peer, theta, delay)
-                kwargs.setdefault("theta", args[1])
-                kwargs.setdefault("delay", args[2])
-            elif len(args) >= 4:
-                # (peer, t1, t2, t3, t4, ...)
-                field_names = [
-                    "peer",
-                    "t1",
-                    "t2",
-                    "t3",
-                    "t4",
-                    "server_stratum",
-                    "nonce_matched",
-                    "status",
-                ]
-                for i, val in enumerate(args[1:], start=1):
-                    if i < len(field_names):
-                        kwargs.setdefault(field_names[i], val)
-        super().__init__(**kwargs)
 
     @property
     def peer_id(self) -> str:

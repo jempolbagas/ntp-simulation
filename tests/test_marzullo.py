@@ -15,40 +15,12 @@ from ntp_simulation.algorithms.marzullo import (
     compute_interval,
     marzullo_intersection,
 )
-
-# Support either dataclass PeerSample from algorithms or Pydantic PeerSample from models
-try:
-    from ntp_simulation.algorithms.marzullo import PeerSample
-except ImportError:
-    from ntp_simulation.models.peer import PeerAddress, PeerSample as ModelPeerSample
-
-    def PeerSample(peer_id: str, theta: float, delay: float, stratum: int = 1):
-        host, port = (peer_id.split(":") if ":" in peer_id else (peer_id, "5000"))
-        return ModelPeerSample(
-            peer=PeerAddress(host=host, port=int(port)),
-            t1=100.0,
-            t2=100.0 + theta + delay / 2.0,
-            t3=100.0 + theta + delay / 2.0,
-            t4=100.0 + delay,
-            server_stratum=stratum,
-        )
+from ntp_simulation.models.peer import PeerSample
 
 
-def make_sample(peer_id: str, theta: float, delay: float, stratum: int = 1):
-    """Helper creating a sample compatible with marzullo_intersection."""
-    try:
-        return PeerSample(peer_id=peer_id, theta=theta, delay=delay, stratum=stratum)
-    except TypeError:
-        # If Pydantic model requiring peer object
-        from ntp_simulation.models.peer import PeerAddress, PeerSample as PydanticSample
-        return PydanticSample(
-            peer=PeerAddress(host=peer_id, port=5000),
-            t1=0.0,
-            t2=theta + delay / 2.0,
-            t3=theta + delay / 2.0,
-            t4=delay,
-            server_stratum=stratum,
-        )
+def make_sample(peer_id: str, theta: float, delay: float, stratum: int = 1) -> PeerSample:
+    """Helper creating a PeerSample compatible with marzullo_intersection."""
+    return PeerSample(peer_id=peer_id, theta=theta, delay=delay, stratum=stratum)
 
 
 # ==============================================================================

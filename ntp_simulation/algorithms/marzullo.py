@@ -53,36 +53,11 @@ def compute_interval(
 
 
 def _extract_sample_data(sample: Any) -> Tuple[str, float, float]:
-    """Extracts (peer_id, theta, delay) from sample supporting Pydantic model, dataclass, or dict."""
-    if hasattr(sample, "peer_id") and sample.peer_id:
-        peer_id = str(sample.peer_id)
-    elif hasattr(sample, "peer") and sample.peer:
-        if hasattr(sample.peer, "key"):
-            peer_id = str(sample.peer.key)
-        else:
-            peer_id = str(sample.peer)
-    elif isinstance(sample, dict) and "peer_id" in sample:
-        peer_id = str(sample["peer_id"])
-    elif isinstance(sample, dict) and "peer" in sample:
-        peer_id = str(sample["peer"])
-    else:
-        peer_id = "unknown"
-
-    if hasattr(sample, "theta"):
-        theta = float(sample.theta)
-    elif isinstance(sample, dict) and "theta" in sample:
-        theta = float(sample["theta"])
-    else:
-        theta = 0.0
-
-    if hasattr(sample, "delay"):
-        delay = float(sample.delay)
-    elif isinstance(sample, dict) and "delay" in sample:
-        delay = float(sample["delay"])
-    else:
-        delay = 0.0
-
-    return peer_id, theta, delay
+    """Extracts (peer_id, theta, delay) from a PeerSample or dict."""
+    if isinstance(sample, dict):
+        pid = str(sample.get("peer_id") or sample.get("peer") or "unknown")
+        return pid, float(sample.get("theta", 0.0)), float(sample.get("delay", 0.0))
+    return str(sample.peer_id), float(sample.theta), float(sample.delay)
 
 
 def marzullo_intersection(
@@ -111,28 +86,6 @@ def marzullo_intersection(
     n = len(extracted)
     if n == 0:
         return MarzulloResult()
-
-    if n == 1:
-        pid, theta, delay, _ = extracted[0]
-        interval = compute_interval(theta, delay, dispersion_floor=dispersion_floor)
-        return MarzulloResult(
-            truechimers=[pid],
-            falsetickers=[],
-            chosen_peer=pid,
-            intersection_interval=interval,
-            max_overlap=1,
-            total_peers=1,
-            tolerated_falsetickers=0,
-            peer_status={
-                pid: {
-                    "classification": "[TRUECHIMER]",
-                    "action": "SELECTED FOR SYNC",
-                    "interval": interval,
-                    "theta": theta,
-                    "delay": delay,
-                }
-            },
-        )
 
     # 1. Build endpoint table: (coordinate, type, peer_id)
     # type: -1 = interval start, +1 = interval end
@@ -236,18 +189,6 @@ def marzullo_intersection(
                 "theta": theta,
                 "delay": delay,
             }
-
-    if not truechimers:
-        return MarzulloResult(
-            truechimers=[],
-            falsetickers=[pid for pid, _, _, _ in extracted],
-            chosen_peer=None,
-            intersection_interval=None,
-            max_overlap=0,
-            total_peers=n,
-            tolerated_falsetickers=n,
-            peer_status=peer_status,
-        )
 
     # 5. Candidate selection: minimum delay among truechimers
     # Tie-break 1: minimum |theta|
