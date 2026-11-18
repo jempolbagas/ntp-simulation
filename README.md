@@ -40,7 +40,14 @@ ntp-simulation/
 │   └── ui.py                     # POSIX KeyReader, Rich gauges/charts, and 4-pane TUI dashboard
 ├── scripts/
 │   └── run_cluster_tmux.sh       # 6-node local cluster orchestrator (tiled tmux grid)
-├── tests/                        # Automated test suite
+├── tests/                        # Automated test suite (111 test cases)
+│   ├── test_models.py            # Packet schemas, nonces, timing math, NodeConfig
+│   ├── test_marzullo.py          # Sweep-line consensus, dispersion floor, outlier rejection
+│   ├── test_clock.py             # Step/slew monotonicity, Brownian drift, thread safety
+│   ├── test_network.py           # Concurrent UDP polling, fault injection, Byzantine quorum
+│   ├── test_cli_cluster.py       # CLI flag validation & tmux cluster script checks
+│   └── test_ui.py                # KeyReader PTY restoration, widgets, & TUI freeze snapshot
+├── .gitignore                    # Bytecode & test cache exclusions
 ├── requirements.txt              # rich>=13.0.0, pydantic>=2.0.0, pytest>=7.0.0
 └── README.md                     # Dokumentasi teknis sistem
 ```
@@ -98,7 +105,7 @@ Algoritma Marzullo membangun tabel titik batas (endpoints):
 - Titik akhir interval: $( \theta_i + (\delta_i/2 + \epsilon_{\text{floor}}), \; +1 )$
 
 Tabel diurutkan berdasarkan nilai offset secara menaik. Jika terdapat koordinat yang bernilai sama, titik awal ($-1$) ditempatkan lebih dahulu daripada titik akhir ($+1$) untuk menjamin perhitungan irisan yang konsisten:
-- Algoritma melakukan penyisiran (*sweep-line*) terhadap semua titik untuk mencari irisan terbesar yang disepakati oleh mayoritas sumber waktu (*Truechimers*).
+- Algoritma melakukan deduplikasi identitas peer (`HOST:PORT`) serta penyisiran (*sweep-line*) terhadap semua titik untuk mencari irisan terbesar yang disepakati oleh mayoritas ketat sumber waktu (*Truechimers*, $n - f > n/2$).
 - Peer yang intervalnya berada di luar wilayah konsensus diklasifikasikan sebagai **Falseticker** dan dieliminasi dari kalkulasi penyesuaian jam.
 - Dari kumpulan *Truechimers*, dipilih satu peer terbaik yang memiliki **round-trip delay terkecil ($\min \delta_i$)** sebagai referensi sinkronisasi.
 
@@ -112,11 +119,11 @@ Jam virtual (`VirtualClock`) mengimplementasikan model jam fisik yang realistis:
    - Mensimulasikan fluktuasi termal dan ketidakstabilan osilator kuarsa fisik.
    - Drift bergerak secara *random walk* dalam rentang $\pm 25\text{ ms/s}$ dengan penghalusan eksponensial.
 2. **Step Mode (Instantaneous Jump):**
-   - Offset diaplikasikan seketika: $\Delta t = \theta$.
+   - Offset diaplikasikan seketika: $\Delta t = \theta$, sekaligus mereset antrean *slew* yang sedang berjalan.
    - Cocok untuk koreksi awal saat deviasi waktu sangat besar.
 3. **Slew Mode (Continuous Frequency Slewing):**
-   - Offset disesuaikan secara bertahap dengan laju konstan $0.40\text{ s/s}$.
-   - Mencegah terjadinya pembalikan waktu (*monotonicity violation*), menjaga keandalan database dan log sistem operasi.
+   - Offset disesuaikan secara bertahap dengan laju konstan $0.40\text{ s/s}$ dan diinterpolasi secara kontinu pada setiap pembacaan `clock.now()`.
+   - Mencegah terjadinya pembalikan waktu (*monotonicity violation*) bahkan saat *negative slewing*, menjaga keandalan database dan log sistem operasi.
 
 ---
 
@@ -251,8 +258,9 @@ pytest tests/test_ui.py -v
 ```
 
 ### Cakupan Pengujian
-1. **Marzullo Algorithm:** Verifikasi interval overlap, tie-breaking endpoint sorting, konsensus mayoritas, serta eliminasi falseticker pada berbagai variasi skenario kegagalan.
-2. **VirtualClock Engine:** Verifikasi perhitungan waktu thread-safe, laju adaptasi slewing ($0.40\text{ s/s}$), instantaneous step, dan batasan random-walk Brownian drift.
-3. **Data Models & Nonce:** Validasi skema Pydantic untuk request/response UDP, validasi rentang stratum, serialisasi JSON, dan pencocokan correlation nonce.
-4. **Network & Concurrency:** Pengujian concurrent UDP polling, toleransi packet drop, server listener, dan fault injection.
-5. **Cluster & Runner:** Verifikasi script runner tmux, perintah subcommands, dan integritas konfigurasi port cluster.
+1. **Marzullo Algorithm (`test_marzullo.py`):** Verifikasi interval overlap, tie-breaking endpoint sorting, deduplikasi peer, konsensus mayoritas, serta eliminasi falseticker pada berbagai variasi skenario kegagalan.
+2. **VirtualClock Engine (`test_clock.py`):** Verifikasi perhitungan waktu thread-safe, monotonisitas kontinu saat *negative slewing* ($0.40\text{ s/s}$), instantaneous step, dan batasan random-walk Brownian drift.
+3. **Data Models & Nonce (`test_models.py`):** Validasi skema Pydantic untuk request/response UDP, validasi rentang stratum, deduplikasi upstream pada `NodeConfig`, serialisasi JSON, dan pencocokan correlation nonce.
+4. **Network & Byzantine Quorum (`test_network.py`):** Pengujian concurrent UDP polling, toleransi packet drop, server listener, fault injection, serta penolakan falseticker pada topologi multi-hop Stratum 1–2–3.
+5. **Cluster & CLI (`test_cli_cluster.py`):** Verifikasi argumen CLI, script runner tmux, perintah subcommands, dan integritas konfigurasi port cluster.
+6. **UI & Terminal Safety (`test_ui.py`):** Verifikasi restorasi atribut terminal POSIX (`termios`) pada `KeyReader`, ketahanan widget terhadap nilai ekstrem (`NaN`/`inf`), dan isolasi snapshot saat TUI dibekukan (`[SPACE]`).
