@@ -293,72 +293,35 @@ def marzullo_evaluate(
     """
     from ntp_simulation.models.peer import PeerEvaluation
 
-    reports: Dict[str, PeerEvaluation] = {}
-    responded_samples: List[Any] = []
-
-    def _meta(s: Any) -> Tuple[str, Optional[int], Optional[float], Optional[float], Optional[float], Optional[float]]:
-        get = (lambda k, d=None: s.get(k, d)) if isinstance(s, dict) else (lambda k, d=None: getattr(s, k, d))
-        return (
-            get("status", "RESPONDED"),
-            get("server_stratum"),
-            get("t1"),
-            get("t2"),
-            get("t3"),
-            get("t4"),
-        )
-
+    deduped: Dict[str, Any] = {}
     for s in samples:
         pid, theta, delay = _extract_sample_data(s)
-        status, server_stratum, t1, t2, t3, t4 = _meta(s)
-
-        if status == "RESPONDED":
-            responded_samples.append(s)
-        else:
-            reports[pid] = PeerEvaluation(
-                peer_key=pid,
-                stratum=server_stratum,
-                delay=delay,
-                theta=theta,
-                status=status,
-                classification="[UNREACHABLE]",
-                action=f"DISCARDED ({status})",
-                t1=t1,
-                t2=t2,
-                t3=t3,
-                t4=t4,
-                interval=None,
-            )
-
-    if not responded_samples:
-        return reports, None
-
-    result = marzullo_intersection(responded_samples, dispersion_floor=dispersion_floor)
-
-    for s in responded_samples:
-        pid, theta, delay = _extract_sample_data(s)
-        _, server_stratum, t1, t2, t3, t4 = _meta(s)
-
-        status_info = result.peer_status.get(pid, {})
-        classification = status_info.get("classification", "[UNKNOWN]")
-        action = status_info.get("action", "PENDING")
-        interval = status_info.get(
-            "interval",
-            compute_interval(theta, delay, dispersion_floor=dispersion_floor),
+        get = s.get if isinstance(s, dict) else lambda k, d=None, obj=s: getattr(obj, k, d)
+        deduped[pid] = (
+            s, theta, delay, get("status", "RESPONDED"),
+            get("server_stratum"), get("t1"), get("t2"), get("t3"), get("t4"),
         )
 
+    responded = [item[0] for item in deduped.values() if item[3] == "RESPONDED"]
+    result = marzullo_intersection(responded, dispersion_floor=dispersion_floor) if responded else MarzulloResult()
+
+    reports: Dict[str, PeerEvaluation] = {}
+    for pid, (_, theta, delay, status, stratum, t1, t2, t3, t4) in deduped.items():
+        info = result.peer_status.get(pid, {})
+        ok = status == "RESPONDED"
         reports[pid] = PeerEvaluation(
             peer_key=pid,
-            stratum=server_stratum,
+            stratum=stratum,
             delay=delay,
             theta=theta,
-            status="RESPONDED",
-            classification=classification,
-            action=action,
+            status=status,
+            classification=info.get("classification", "[UNKNOWN]") if ok else "[UNREACHABLE]",
+            action=info.get("action", "PENDING") if ok else f"DISCARDED ({status})",
             t1=t1,
             t2=t2,
             t3=t3,
             t4=t4,
-            interval=interval,
+            interval=info.get("interval", compute_interval(theta, delay, dispersion_floor=dispersion_floor)) if ok else None,
         )
 
     return reports, result.chosen_peer

@@ -117,9 +117,10 @@ class TestClockSlewing:
         clock.start_slew(-20.0)
         clock.tick(dt=4.0)  # slewed -1.6s, remaining -18.4s
         clock.start_slew(-18.4)
-        rem, target, _ = clock.get_slew_info()
+        rem, target, ratio = clock.get_slew_info()
         assert rem == pytest.approx(-18.4)
-        assert target == pytest.approx(-18.4)
+        assert target == pytest.approx(-20.0)
+        assert ratio == pytest.approx(0.08)
 
 
 class TestBrownianDrift:

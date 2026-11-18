@@ -50,46 +50,44 @@ class SharedState:
         elif config is not None:
             resolved_config = config
 
-        if resolved_config is not None:
-            self.stratum = resolved_config.stratum
-            self.port = resolved_config.port
-            self.bind_host = resolved_config.bind_host
-            self.upstreams = list(resolved_config.upstreams)
-            self.sync_mode = resolved_config.sync_mode
-            self.falseticker_skew = resolved_config.falseticker_skew
-            self.chaos_probability = resolved_config.chaos_probability
-            self.chaos_min_skew = resolved_config.chaos_min_skew
-            self.chaos_max_skew = resolved_config.chaos_max_skew
-            self.socket_timeout = resolved_config.socket_timeout
-            self.dispersion_floor = resolved_config.dispersion_floor
-        else:
-            if isinstance(config_or_stratum, int):
-                self.stratum = config_or_stratum
-            elif stratum is not None:
-                self.stratum = stratum
-            else:
-                self.stratum = 1
-
-            self.port = port if port is not None else 5000
-            self.bind_host = bind_host
-            self.sync_mode = sync_mode
-            self.falseticker_skew = falseticker_skew
-            self.chaos_probability = float(kwargs.get("chaos_probability", 0.35))
-            self.chaos_min_skew = float(kwargs.get("chaos_min_skew", 30.0))
-            self.chaos_max_skew = float(kwargs.get("chaos_max_skew", 90.0))
-            self.socket_timeout = float(kwargs.get("socket_timeout", 1.5))
-            self.dispersion_floor = kwargs.get("dispersion_floor", 0.050)
-
-            parsed_upstreams: List[PeerAddress] = []
-            raw_upstreams = upstreams if upstreams is not None else []
-            for item in raw_upstreams:
-                if isinstance(item, PeerAddress):
-                    parsed_upstreams.append(item)
-                elif isinstance(item, str):
-                    parsed_upstreams.append(PeerAddress.parse(item))
-                elif isinstance(item, (tuple, list)) and len(item) == 2:
-                    parsed_upstreams.append(PeerAddress(host=str(item[0]), port=int(item[1])))
-            self.upstreams = parsed_upstreams
+        cfg = resolved_config or NodeConfig(
+            stratum=1,
+            port=port if port is not None else 5000,
+            bind_host=bind_host,
+            sync_mode=sync_mode,
+            falseticker_skew=falseticker_skew,
+            **{
+                k: kwargs[k]
+                for k in (
+                    "chaos_probability",
+                    "chaos_min_skew",
+                    "chaos_max_skew",
+                    "socket_timeout",
+                    "dispersion_floor",
+                )
+                if k in kwargs
+            },
+        )
+        self.stratum = (
+            resolved_config.stratum
+            if resolved_config is not None
+            else (config_or_stratum if isinstance(config_or_stratum, int) else (stratum or 1))
+        )
+        self.port = cfg.port
+        self.bind_host = cfg.bind_host
+        self.sync_mode = cfg.sync_mode
+        self.falseticker_skew = cfg.falseticker_skew
+        self.chaos_probability = cfg.chaos_probability
+        self.chaos_min_skew = cfg.chaos_min_skew
+        self.chaos_max_skew = cfg.chaos_max_skew
+        self.socket_timeout = cfg.socket_timeout
+        self.dispersion_floor = cfg.dispersion_floor
+        raw_peers = (
+            resolved_config.upstreams
+            if resolved_config is not None
+            else NodeConfig.parse_upstreams(upstreams or [])
+        )
+        self.upstreams = list(dict.fromkeys(raw_peers))
 
         self.local_ip = str(kwargs["local_ip"]) if "local_ip" in kwargs else get_local_ip()
         self.hostname = str(kwargs["hostname"]) if "hostname" in kwargs else socket.gethostname()
@@ -158,7 +156,7 @@ class SharedState:
         """Toggles random timing chaos mode (35% probability of ±30-90s anomaly)."""
         with self.lock:
             self.chaos_mode = not self.chaos_mode
-            status = "ENABLED (35% Sporadic Glitches)" if self.chaos_mode else "DISABLED"
+            status = f"ENABLED ({self.chaos_probability * 100:.0f}% Sporadic Glitches)" if self.chaos_mode else "DISABLED"
             self.last_action_banner = f"Random Chaos Mode: {status}"
             return self.chaos_mode
 

@@ -41,7 +41,7 @@ class NodeConfig(BaseModel):
             for item in v:
                 if isinstance(item, str):
                     parsed.append(PeerAddress.parse(item))
-                elif isinstance(item, tuple) and len(item) == 2:
+                elif isinstance(item, (tuple, list)) and len(item) == 2:
                     parsed.append(PeerAddress(host=str(item[0]), port=int(item[1])))
                 else:
                     parsed.append(item)

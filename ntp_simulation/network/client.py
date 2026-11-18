@@ -11,6 +11,16 @@ from ntp_simulation.models.peer import PeerAddress, PeerSample
 from ntp_simulation.network.socket_utils import create_udp_socket
 
 
+def _coerce_peer(peer: Union[PeerAddress, str, tuple]) -> PeerAddress:
+    if isinstance(peer, PeerAddress):
+        return peer
+    if isinstance(peer, str):
+        return PeerAddress.parse(peer)
+    if isinstance(peer, (tuple, list)):
+        return PeerAddress(host=str(peer[0]), port=int(peer[1]))
+    raise TypeError(f"Unsupported peer address type: {type(peer)}")
+
+
 def poll_peer(
     peer: Union[PeerAddress, str, tuple],
     clock: VirtualClock,
@@ -29,14 +39,7 @@ def poll_peer(
         PeerSample: Measurement containing transit timestamps (t1..t4), delay, offset,
                     and correlation validation status.
     """
-    if isinstance(peer, str):
-        target_peer = PeerAddress.parse(peer)
-    elif isinstance(peer, (tuple, list)):
-        target_peer = PeerAddress(host=str(peer[0]), port=int(peer[1]))
-    elif isinstance(peer, PeerAddress):
-        target_peer = peer
-    else:
-        raise TypeError(f"Unsupported peer address type: {type(peer)}")
+    target_peer = _coerce_peer(peer)
 
     sock = create_udp_socket(timeout=timeout)
     t1: Optional[float] = None
@@ -128,17 +131,7 @@ def poll_peers_concurrently(
     if not upstreams:
         return {}
 
-    parsed_peers: List[PeerAddress] = []
-    for p in upstreams:
-        if isinstance(p, str):
-            parsed_peers.append(PeerAddress.parse(p))
-        elif isinstance(p, (tuple, list)):
-            parsed_peers.append(PeerAddress(host=str(p[0]), port=int(p[1])))
-        elif isinstance(p, PeerAddress):
-            parsed_peers.append(p)
-        else:
-            raise TypeError(f"Unsupported peer address type in list: {type(p)}")
-
+    parsed_peers = list(dict.fromkeys(_coerce_peer(p) for p in upstreams))
     if len(parsed_peers) == 1:
         peer = parsed_peers[0]
         return {peer.key: poll_peer(peer, clock, timeout, client_id)}

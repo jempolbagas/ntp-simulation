@@ -303,8 +303,16 @@ class TestMarzulloAlgorithm:
         assert result.falsetickers == ["fault"]
 
     def test_duplicate_peer_samples_cannot_spoof_majority(self):
+        from ntp_simulation.algorithms.marzullo import marzullo_evaluate
+
         honest = make_sample("127.0.0.1:5002", theta=0.0, delay=0.010)
         fault = make_sample("127.0.0.1:5003", theta=60.0, delay=0.010)
         result = marzullo_intersection([honest, fault, fault])
         assert result.has_consensus is False
         assert result.chosen_peer is None
+
+        # Later TIMEOUT sample for the same peer must supersede an earlier RESPONDED sample
+        timeout_sample = {"peer_id": "127.0.0.1:5002", "theta": 0.0, "delay": 0.010, "status": "TIMEOUT"}
+        reports, chosen = marzullo_evaluate([honest, timeout_sample])
+        assert chosen is None
+        assert reports["127.0.0.1:5002"].status == "TIMEOUT"

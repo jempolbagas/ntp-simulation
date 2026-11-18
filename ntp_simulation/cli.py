@@ -285,7 +285,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         initial_offset = (
             0.0 if args.stratum == 1 else random.choice([-1.0, 1.0]) * random.uniform(5.0, 30.0)
         )
-    clock = VirtualClock(initial_offset=initial_offset)
+    clock = VirtualClock(initial_offset=initial_offset, slew_rate=config.slew_rate)
     if args.drift:
         clock.set_drift(True)
 

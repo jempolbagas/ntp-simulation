@@ -101,8 +101,10 @@ class VirtualClock:
             delta: Total time adjustment in seconds to slew gradually.
         """
         with self._lock:
-            self._slew_remaining = float(delta)
-            self._slew_total_target = self._slew_remaining
+            d = float(delta)
+            if self._slew_remaining * d <= 0.0 or abs(d) > abs(self._slew_total_target):
+                self._slew_total_target = d
+            self._slew_remaining = d
 
     def _advance_locked(self, now: float, elapsed: float) -> None:
         """Integrates Brownian drift and active slew over elapsed seconds (caller holds _lock)."""
