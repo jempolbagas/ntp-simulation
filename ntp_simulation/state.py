@@ -7,15 +7,15 @@ import threading
 import time
 from typing import Deque, Dict, Optional
 
-from ntp_simulation.clock.virtual_clock import VirtualClock
-from ntp_simulation.models.config import NodeConfig
-from ntp_simulation.models.peer import PeerEvaluation
-from ntp_simulation.models.telemetry import (
+from ntp_simulation.clock import VirtualClock
+from ntp_simulation.models import (
+    NodeConfig,
+    PeerEvaluation,
     ServerLogEntry,
     SyncHistoryEntry,
     TelemetrySnapshot,
 )
-from ntp_simulation.network.socket_utils import get_local_ip
+from ntp_simulation.network import get_local_ip
 
 
 class SharedState:

@@ -8,14 +8,14 @@ touching intervals), candidate selection with tie-breakers, and adversarial stre
 
 import pytest
 
-pytest.importorskip("ntp_simulation.algorithms")
+pytest.importorskip("ntp_simulation.marzullo")
 
-from ntp_simulation.algorithms.marzullo import (
+from ntp_simulation.marzullo import (
     MarzulloResult,
     compute_interval,
     marzullo_intersection,
 )
-from ntp_simulation.models.peer import PeerSample
+from ntp_simulation.models import PeerSample
 
 
 def make_sample(peer_id: str, theta: float, delay: float, stratum: int = 1) -> PeerSample:
@@ -275,7 +275,7 @@ class TestMarzulloAlgorithm:
         assert result.falsetickers == ["fault"]
 
     def test_duplicate_peer_samples_cannot_spoof_majority(self):
-        from ntp_simulation.algorithms.marzullo import marzullo_evaluate
+        from ntp_simulation.marzullo import marzullo_evaluate
 
         honest = make_sample("127.0.0.1:5002", theta=0.0, delay=0.010)
         fault = make_sample("127.0.0.1:5003", theta=60.0, delay=0.010)

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from ntp_simulation.models.peer import PeerSample
+from ntp_simulation.models import PeerEvaluation, PeerSample
 
 
 @dataclass
@@ -42,7 +42,7 @@ def compute_interval(
     dispersion_floor: float = 0.0,
 ) -> Tuple[float, float]:
     """Computes confidence interval [theta - half_width, theta + half_width].
-    
+
     Includes non-negative half-delay plus an optional dispersion/jitter floor
     (RFC 5905 synchronization distance floor) to prevent false positives on
     near-zero delay networks.
@@ -64,20 +64,7 @@ def marzullo_intersection(
     samples: List[Any],
     dispersion_floor: float = 0.0,
 ) -> MarzulloResult:
-    """Executes the authentic Marzullo sweep-line intersection algorithm.
-
-    Given confidence intervals [theta_i - (delay_i / 2 + dispersion_floor), theta_i + (delay_i / 2 + dispersion_floor)] for n peers,
-    finds the smallest interval containing points that lie in the largest number of
-    intervals while tolerating up to f < n / 2 falsetickers (strict majority).
-
-    Args:
-        samples: List of peer samples (PeerSample, dict, or object with theta & delay).
-        dispersion_floor: Optional minimum dispersion/jitter uncertainty floor in seconds (default 0.0).
-
-    Returns:
-        MarzulloResult with classified truechimers, falsetickers, consensus interval,
-        and selected synchronization candidate.
-    """
+    """Executes the authentic Marzullo sweep-line intersection algorithm."""
     deduped: Dict[str, Tuple[str, float, float, Any]] = {}
     for s in samples:
         pid, theta, delay = _extract_sample_data(s)
@@ -100,36 +87,30 @@ def marzullo_intersection(
         endpoints.append((low, -1, pid))
         endpoints.append((high, 1, pid))
 
-    # 2. Sort endpoints:
-    # Primary key: coordinate value (ascending)
-    # Secondary key: event type (-1 before +1, guaranteeing start before end at equal coordinates)
-    # Tertiary key: peer_id (deterministic tie-breaker)
+    # 2. Sort endpoints: coordinate ascending, start (-1) before end (+1), peer_id tie-breaker
     endpoints.sort(key=lambda item: (item[0], item[1], str(item[2])))
 
     # 3. Sweep-line search for minimal falsetickers f < n / 2 (strict majority)
     best_interval: Optional[Tuple[float, float]] = None
     best_f = 0
     found = False
-
     max_allowed_f = (n - 1) // 2
 
     for f in range(0, max_allowed_f + 1):
         target_count = n - f
 
-        # Forward sweep: find lower bound c_low
         count = 0
         c_low: Optional[float] = None
         for val, event_type, _ in endpoints:
-            count -= event_type  # -(-1) = +1 (entered interval), -(+1) = -1 (exited interval)
+            count -= event_type
             if count >= target_count:
                 c_low = val
                 break
 
-        # Backward sweep: find upper bound c_high
         count = 0
         c_high: Optional[float] = None
         for val, event_type, _ in reversed(endpoints):
-            count += event_type  # +(+1) = +1 (entered interval in reverse), +(-1) = -1
+            count += event_type
             if count >= target_count:
                 c_high = val
                 break
@@ -145,7 +126,6 @@ def marzullo_intersection(
     falsetickers: List[str] = []
 
     if not found or best_interval is None:
-        # No majority consensus exists (f >= n / 2)
         for pid, theta, delay, _ in extracted:
             falsetickers.append(pid)
             peer_status[pid] = {
@@ -170,7 +150,6 @@ def marzullo_intersection(
     c_low, c_high = best_interval
     for pid, theta, delay, _ in extracted:
         p_low, p_high = peer_intervals[pid]
-        # Intersection test: [p_low, p_high] intersects [c_low, c_high]
         if max(p_low, c_low) <= min(p_high, c_high):
             truechimers.append(pid)
             peer_status[pid] = {
@@ -190,15 +169,13 @@ def marzullo_intersection(
                 "delay": delay,
             }
 
-    # 5. Candidate selection: minimum delay among truechimers
-    # Tie-break 1: minimum |theta|
-    # Tie-break 2: peer_id
+    # 5. Candidate selection: minimum delay among truechimers, then |theta|, then peer_id
     chosen_peer = min(
         truechimers,
         key=lambda p: (
-            sample_by_id[p][1],       # delay
-            abs(sample_by_id[p][0]),  # abs(theta)
-            str(p),                   # peer_id
+            sample_by_id[p][1],
+            abs(sample_by_id[p][0]),
+            str(p),
         ),
     )
     peer_status[chosen_peer]["action"] = "SELECTED FOR SYNC"
@@ -218,22 +195,8 @@ def marzullo_intersection(
 def marzullo_evaluate(
     samples: List[Any],
     dispersion_floor: float = 0.050,
-) -> Tuple[Dict[str, Any], Optional[str]]:
-    """Evaluates peer samples using Marzullo intersection and constructs PeerEvaluation records.
-
-    Handles both responsive samples and failed/timed-out peer samples.
-    Includes an RFC 5905-compliant dispersion/jitter floor (default 50ms) to prevent
-    spurious rejection of honest peers on low-latency local networks.
-
-    Args:
-        samples: List of PeerSample, dicts, or objects with peer_id/theta/delay.
-        dispersion_floor: Minimum uncertainty floor in seconds (default 0.050s = 50ms).
-
-    Returns:
-        Tuple of (reports_dict, chosen_peer_key)
-    """
-    from ntp_simulation.models.peer import PeerEvaluation
-
+) -> Tuple[Dict[str, PeerEvaluation], Optional[str]]:
+    """Evaluates peer samples using Marzullo intersection and constructs PeerEvaluation records."""
     deduped: Dict[str, Any] = {}
     for s in samples:
         pid, theta, delay = _extract_sample_data(s)
@@ -266,4 +229,3 @@ def marzullo_evaluate(
         )
 
     return reports, result.chosen_peer
-

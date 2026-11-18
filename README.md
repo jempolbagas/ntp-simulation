@@ -33,25 +33,14 @@ ntp-simulation/
 │   ├── __main__.py               # Entrypoint modul: python3 -m ntp_simulation
 │   ├── cli.py                    # Argument parsing, lifecycle coordination, background workers
 │   ├── state.py                  # Thread-safe telemetry store (SharedState & Snapshot)
-│   ├── models/                   # Pydantic schemas
-│   │   ├── packet.py             # NTPRequest & NTPResponse dengan cryptographic nonce
-│   │   ├── peer.py               # PeerAddress, PeerSample, MarzulloEvaluation
-│   │   └── config.py             # NodeConfig runtime validation
-│   ├── algorithms/
-│   │   └── marzullo.py           # Authentic Marzullo Intersection Algorithm (sweep-line)
-│   ├── clock/
-│   │   └── virtual_clock.py      # Thread-safe timekeeper, Brownian drift, step/slew dynamics
-│   ├── network/
-│   │   ├── client.py             # Concurrent UDP client dengan ThreadPoolExecutor & nonce matching
-│   │   ├── server.py             # UDP listener dengan fault injection (+60s skew & 35% chaos)
-│   │   └── socket_utils.py       # Socket bindings & local IP address resolution
-│   └── ui/
-│       ├── key_reader.py         # Signal-safe POSIX non-blocking key reader (atexit/SIGINT cleanup)
-│       ├── widgets.py            # Rich gauges, sparklines, dan telemetry tables
-│       └── dashboard.py          # 4-section layout (Header, Clocks, Main body, Footer)
+│   ├── models.py                 # Pydantic schemas (NTPRequest/Response, Peer, NodeConfig, Telemetry)
+│   ├── marzullo.py               # Authentic Marzullo Intersection Algorithm (sweep-line)
+│   ├── clock.py                  # Thread-safe VirtualClock, Brownian drift, step/slew dynamics
+│   ├── network.py                # Concurrent UDP client, server listener, & fault injection
+│   └── ui.py                     # POSIX KeyReader, Rich gauges/charts, and 4-pane TUI dashboard
 ├── scripts/
 │   └── run_cluster_tmux.sh       # 6-node local cluster orchestrator (tiled tmux grid)
-├── tests/                        # Comprehensive automated test suite
+├── tests/                        # Automated test suite
 ├── requirements.txt              # rich>=13.0.0, pydantic>=2.0.0, pytest>=7.0.0
 └── README.md                     # Dokumentasi teknis sistem
 ```

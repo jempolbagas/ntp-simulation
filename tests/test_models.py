@@ -10,10 +10,17 @@ import pydantic
 
 pytest.importorskip("ntp_simulation.models")
 
-from ntp_simulation.models.packet import NTPRequest, NTPResponse
-from ntp_simulation.models.peer import PeerAddress, PeerEvaluation, PeerSample
-from ntp_simulation.models.config import NodeConfig
-from ntp_simulation.models.telemetry import ServerLogEntry, SyncHistoryEntry, TelemetrySnapshot
+from ntp_simulation.models import (
+    NodeConfig,
+    NTPRequest,
+    NTPResponse,
+    PeerAddress,
+    PeerEvaluation,
+    PeerSample,
+    ServerLogEntry,
+    SyncHistoryEntry,
+    TelemetrySnapshot,
+)
 
 
 # ==============================================================================

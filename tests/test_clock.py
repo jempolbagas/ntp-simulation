@@ -10,9 +10,9 @@ import threading
 import time
 import pytest
 
-pytest.importorskip("ntp_simulation.clock.virtual_clock")
+pytest.importorskip("ntp_simulation.clock")
 
-from ntp_simulation.clock.virtual_clock import VirtualClock
+from ntp_simulation.clock import VirtualClock
 
 
 class TestVirtualClockBasics:

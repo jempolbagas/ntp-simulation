@@ -1,8 +1,14 @@
-"""Rich TUI Dashboard builder with frozen snapshot support."""
+"""Terminal UI components: POSIX KeyReader, Unicode gauges/charts, and Rich TUI dashboard."""
 from __future__ import annotations
 
+import atexit
+import math
+import os
+import signal
+import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
+
 from rich.align import Align
 from rich.console import Group
 from rich.layout import Layout
@@ -12,32 +18,338 @@ from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 
-from ntp_simulation.clock.virtual_clock import VirtualClock
+from ntp_simulation.clock import VirtualClock
 from ntp_simulation.state import SharedState
-from ntp_simulation.ui.widgets import (
-    generate_sparkline,
-    render_line_chart,
-    render_offset_gauge,
-    render_topology_diagram,
-)
+
+
+class KeyReader:
+    """Reads single keypresses non-blockingly while guaranteeing terminal restoration."""
+
+    def __init__(self) -> None:
+        self.is_windows: bool = os.name == "nt"
+        self.old_settings: Optional[Any] = None
+        self._restored: bool = False
+        self._orig_handlers: Dict[int, Any] = {}
+
+        if not self.is_windows:
+            try:
+                is_atty = bool(sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+            except Exception:
+                is_atty = False
+
+            if is_atty:
+                try:
+                    import termios
+                    import tty
+
+                    fd = sys.stdin.fileno()
+                    self.old_settings = termios.tcgetattr(fd)
+                    tty.setcbreak(fd)
+
+                    atexit.register(self.restore)
+
+                    for sig in (signal.SIGINT, signal.SIGTERM):
+                        try:
+                            orig = signal.signal(sig, self._handle_signal)
+                            self._orig_handlers[sig] = orig
+                        except (ValueError, OSError):
+                            pass
+                except Exception:
+                    self.old_settings = None
+
+    def _handle_signal(self, signum: int, frame: Any) -> None:
+        orig = self._orig_handlers.get(signum)
+        self.restore()
+        if callable(orig) and orig not in (self._handle_signal, signal.SIG_IGN, signal.SIG_DFL):
+            orig(signum, frame)
+        elif orig == signal.SIG_DFL:
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+        else:
+            sys.exit(128 + signum)
+
+    def read_key(self, timeout: float = 0.1) -> Optional[str]:
+        """Reads a single keypress without blocking indefinitely."""
+        if self.is_windows:
+            try:
+                import msvcrt
+
+                start = time.time()
+                while time.time() - start < timeout:
+                    if msvcrt.kbhit():
+                        ch = msvcrt.getch()
+                        try:
+                            return ch.decode("utf-8")
+                        except UnicodeDecodeError:
+                            return None
+                    time.sleep(0.02)
+                return None
+            except Exception:
+                time.sleep(timeout)
+                return None
+        else:
+            try:
+                is_atty = bool(sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+            except Exception:
+                is_atty = False
+
+            if not is_atty or self.old_settings is None:
+                time.sleep(timeout)
+                return None
+
+            try:
+                import select
+
+                rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+                if rlist:
+                    return sys.stdin.read(1)
+                return None
+            except Exception:
+                return None
+
+    def restore(self) -> None:
+        """Restores normal canonical terminal settings and signal handlers."""
+        if not self._restored:
+            try:
+                if self.old_settings is not None and not self.is_windows:
+                    try:
+                        is_atty = bool(sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+                    except Exception:
+                        is_atty = False
+
+                    if is_atty:
+                        import termios
+
+                        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.old_settings)
+            except Exception:
+                pass
+            finally:
+                self._restored = True
+                for sig, orig in list(self._orig_handlers.items()):
+                    try:
+                        signal.signal(sig, orig)
+                    except (ValueError, OSError):
+                        pass
+                self._orig_handlers.clear()
+                try:
+                    atexit.unregister(self.restore)
+                except Exception:
+                    pass
+
+    def __enter__(self) -> KeyReader:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.restore()
+
+
+def generate_sparkline(values: Sequence[float], width: int = 16) -> str:
+    """Renders a Unicode sparkline graph showing offset convergence trend."""
+    if width <= 0:
+        return ""
+    finite = [float(v) for v in values if v is not None and math.isfinite(float(v))]
+    if not finite:
+        return " " * width
+
+    bars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    trimmed = finite[-width:]
+    abs_vals = [abs(v) for v in trimmed]
+    max_val = max(abs_vals) if abs_vals and max(abs_vals) > 0.0 else 1.0
+
+    result = []
+    for v in trimmed:
+        ratio = min(1.0, abs(v) / max_val)
+        idx = int(ratio * (len(bars) - 1))
+        result.append(bars[idx])
+
+    padding = " " * (width - len(result))
+    return padding + "".join(result)
+
+
+def render_offset_gauge(offset: float, width: int = 36) -> Text:
+    """Renders calibrated deviation gauge meter with needle indicator and status badge."""
+    raw_offset = float(offset)
+    abs_val = abs(raw_offset)
+    gauge = Text()
+
+    if not math.isfinite(raw_offset) or abs_val > 1.0:
+        max_bound = 30.0
+        label_l, label_r = "-30s", "+30s"
+    elif abs_val > 0.05:
+        max_bound = 1.0
+        label_l, label_r = "-1.0s", "+1.0s"
+    else:
+        max_bound = 0.05
+        label_l, label_r = "-50ms", "+50ms"
+
+    half_w = width // 2
+    if not math.isfinite(raw_offset):
+        pos = half_w if raw_offset > 0 else (-half_w if raw_offset < 0 else 0)
+    else:
+        clamped_offset = max(-max_bound, min(max_bound, raw_offset))
+        pos = int((clamped_offset / max_bound) * half_w)
+
+    bar_chars = []
+    for i in range(-half_w, half_w + 1):
+        if i == pos:
+            bar_chars.append("█")
+        elif i == 0:
+            bar_chars.append("│")
+        else:
+            bar_chars.append("─")
+
+    gauge_str = "".join(bar_chars)
+
+    if abs_val < 0.005:
+        status_color = "bold green"
+        desc = "LOCKED (< 5ms)"
+    elif abs_val < 0.05:
+        status_color = "green"
+        desc = "ACCURATE (< 50ms)"
+    elif abs_val < 1.0:
+        status_color = "yellow"
+        desc = "MODERATE DRIFT"
+    else:
+        status_color = "bold red"
+        desc = "HIGH SKEW"
+
+    gauge.append(f"{label_l:>6} [")
+    gauge.append(gauge_str, style=status_color)
+    gauge.append(f"] {label_r:<6} ")
+    gauge.append(f"[{desc}]", style=status_color)
+    return gauge
+
+
+def render_topology_diagram(stratum: int) -> Text:
+    """Renders visual ASCII topology hierarchy diagram highlighting the current node."""
+    diag = Text()
+    if stratum == 1:
+        diag.append("[STRATUM 1: MASTER]", style="bold black on bright_yellow")
+        diag.append(" --> [Stratum 2 Relays] --> [Stratum 3 Clients]", style="dim")
+    elif stratum == 2:
+        diag.append("[Stratum 1 Master] --> ", style="dim")
+        diag.append("[STRATUM 2: THIS RELAY]", style="bold white on dodger_blue1")
+        diag.append(" --> [Stratum 3 Clients]", style="dim")
+    else:
+        diag.append("[Stratum 1 Master] --> [Stratum 2 Relays] --> ", style="dim")
+        diag.append("[STRATUM 3: THIS CLIENT]", style="bold white on dark_green")
+    return diag
+
+
+def render_line_chart(
+    values: Sequence[float],
+    width: int = 34,
+    height: int = 7,
+) -> Text:
+    """Renders a multi-line ASCII/Unicode terminal line chart of offset convergence history."""
+    valid_vals = [
+        float(v)
+        for v in values
+        if v is not None and math.isfinite(float(v))
+    ]
+    if not valid_vals:
+        valid_vals = [0.0]
+
+    limit = max(max(abs(v) for v in valid_vals), 0.005)
+    if limit >= 1.0:
+        top_lbl = f"{limit:+6.1f}s"
+        mid_lbl = "   0.0s"
+        bot_lbl = f"{-limit:+6.1f}s"
+    elif limit >= 0.05:
+        top_lbl = f"{limit * 1000:+6.0f}ms"
+        mid_lbl = "    0ms"
+        bot_lbl = f"{-limit * 1000:+6.0f}ms"
+    else:
+        top_lbl = f"{limit * 1000:+6.1f}ms"
+        mid_lbl = "    0ms"
+        bot_lbl = f"{-limit * 1000:+6.1f}ms"
+
+    plot_vals = [None] * max(0, width - len(valid_vals)) + valid_vals[-width:]
+    plot_vals = plot_vals[-width:]
+
+    mid_row = height // 2
+    col_rows: List[Optional[int]] = []
+    for v in plot_vals:
+        if v is None:
+            col_rows.append(None)
+        else:
+            norm = max(-1.0, min(1.0, float(v) / limit))
+            r = int(round(mid_row - norm * mid_row))
+            col_rows.append(max(0, min(height - 1, r)))
+
+    grid = [[" " for _ in range(width)] for _ in range(height)]
+    styles = [["" for _ in range(width)] for _ in range(height)]
+
+    for c in range(width):
+        grid[mid_row][c] = "┄"
+        styles[mid_row][c] = "dim cyan"
+
+    prev_r: Optional[int] = None
+    for c in range(width):
+        curr_r = col_rows[c]
+        if curr_r is not None:
+            v_val = plot_vals[c]
+            abs_v = abs(float(v_val)) if v_val is not None else 0.0
+            if abs_v < 0.005:
+                pt_style = "bold bright_green"
+                char = "█" if curr_r == mid_row else "●"
+            elif abs_v < 0.05:
+                pt_style = "bold green"
+                char = "●"
+            elif abs_v < 1.0:
+                pt_style = "bold yellow"
+                char = "●"
+            else:
+                pt_style = "bold red"
+                char = "▲" if v_val > 0 else "▼"
+
+            if prev_r is not None and prev_r != curr_r:
+                step = 1 if curr_r > prev_r else -1
+                for r in range(prev_r + step, curr_r, step):
+                    grid[r][c] = "│"
+                    styles[r][c] = "cyan" if abs_v < 0.05 else ("yellow" if abs_v < 1.0 else "red")
+
+            grid[curr_r][c] = char
+            styles[curr_r][c] = pt_style
+            prev_r = curr_r
+
+    result = Text()
+    for r in range(height):
+        if r == 0:
+            result.append(f"{top_lbl} ┤", style="cyan")
+        elif r == mid_row:
+            result.append(f"{mid_lbl} ┼", style="bold cyan")
+        elif r == height - 1:
+            result.append(f"{bot_lbl} ┤", style="cyan")
+        else:
+            result.append("        │", style="dim cyan")
+
+        for c in range(width):
+            ch = grid[r][c]
+            st = styles[r][c]
+            result.append(ch, style=st if st else None)
+        result.append("\n")
+
+    result.append("        └" + "─" * width + "\n", style="dim cyan")
+    latest_val = valid_vals[-1]
+    latest_str = (
+        f"Now: {latest_val * 1000:+.2f}ms"
+        if abs(latest_val) < 1.0
+        else f"Now: {latest_val:+.4f}s"
+    )
+    pad_len = max(1, width - len(latest_str) - 8)
+    result.append("        -history" + " " * pad_len, style="dim")
+    status_color = (
+        "bold bright_green"
+        if abs(latest_val) < 0.005
+        else ("green" if abs(latest_val) < 0.05 else ("yellow" if abs(latest_val) < 1.0 else "bold red"))
+    )
+    result.append(f"[{latest_str}]", style=status_color)
+    return result
 
 
 def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
-    """Builds the 4-pane Rich TUI engineering dashboard.
-
-    Panes:
-        header: Stratum badge, IP/hostname, fault status, drift rate, TX/RX counters.
-        clocks: Real-time clock displays, offset deviation gauge, and convergence sparkline.
-        main: Upstream peer Marzullo cross-validation table and sync history / server logs.
-        footer: Hotkey guide for interactive manipulation during demonstrations.
-
-    Args:
-        clock: Active VirtualClock instance.
-        state: SharedState holding telemetry, counters, and frozen snapshots.
-
-    Returns:
-        Layout: Rich Layout instance ready for Live terminal rendering.
-    """
+    """Builds the 4-pane Rich TUI engineering dashboard."""
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=4),
@@ -60,7 +372,6 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         hostname = state.hostname
         server_req_count = state.server_req_count
 
-    # Extract metrics from snapshot if paused, otherwise query live
     if is_paused and snap is not None:
         now_os = snap.now_os
         now_virtual = snap.now_virtual

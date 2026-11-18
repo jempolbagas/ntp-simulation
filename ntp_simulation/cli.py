@@ -14,15 +14,12 @@ from pydantic import ValidationError
 from rich.console import Console
 from rich.live import Live
 
-from ntp_simulation.algorithms.marzullo import marzullo_evaluate
-from ntp_simulation.clock.virtual_clock import VirtualClock
-from ntp_simulation.models.config import NodeConfig
-from ntp_simulation.models.peer import PeerAddress
-from ntp_simulation.network.client import poll_peers_concurrently
-from ntp_simulation.network.server import run_server
+from ntp_simulation.clock import VirtualClock
+from ntp_simulation.marzullo import marzullo_evaluate
+from ntp_simulation.models import NodeConfig, PeerAddress
+from ntp_simulation.network import poll_peers_concurrently, run_server
 from ntp_simulation.state import SharedState
-from ntp_simulation.ui.dashboard import build_dashboard
-from ntp_simulation.ui.key_reader import KeyReader
+from ntp_simulation.ui import KeyReader, build_dashboard
 
 
 def parse_upstream(value: str) -> PeerAddress:

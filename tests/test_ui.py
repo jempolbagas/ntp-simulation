@@ -9,14 +9,12 @@ import termios
 import pytest
 from rich.console import Console
 
-from ntp_simulation.clock.virtual_clock import VirtualClock
-from ntp_simulation.models.config import NodeConfig
-from ntp_simulation.models.peer import PeerEvaluation
-from ntp_simulation.models.telemetry import ServerLogEntry
+from ntp_simulation.clock import VirtualClock
+from ntp_simulation.models import NodeConfig, PeerEvaluation, ServerLogEntry
 from ntp_simulation.state import SharedState
-from ntp_simulation.ui.dashboard import build_dashboard
-from ntp_simulation.ui.key_reader import KeyReader
-from ntp_simulation.ui.widgets import (
+from ntp_simulation.ui import (
+    KeyReader,
+    build_dashboard,
     generate_sparkline,
     render_line_chart,
     render_offset_gauge,

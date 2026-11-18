@@ -21,13 +21,15 @@ from typing import List, Tuple
 
 import pytest
 
-from ntp_simulation.clock.virtual_clock import VirtualClock
-from ntp_simulation.models.config import NodeConfig
-from ntp_simulation.models.packet import NTPRequest, NTPResponse
-from ntp_simulation.models.peer import PeerAddress, PeerSample
-from ntp_simulation.network.client import poll_peer, poll_peers_concurrently
-from ntp_simulation.network.server import run_server
-from ntp_simulation.network.socket_utils import create_udp_socket, get_local_ip
+from ntp_simulation.clock import VirtualClock
+from ntp_simulation.models import NodeConfig, NTPRequest, NTPResponse, PeerAddress, PeerSample
+from ntp_simulation.network import (
+    create_udp_socket,
+    get_local_ip,
+    poll_peer,
+    poll_peers_concurrently,
+    run_server,
+)
 from ntp_simulation.state import SharedState
 
 
@@ -523,7 +525,7 @@ class TestSharedStateAndSnapshotIsolation:
 
     def test_multi_hop_byzantine_quorum_rejects_falseticker(self):
         """Verifies Stratum 3 leaf rejects a +60s falseticker Relay A and syncs to honest Relays B & C."""
-        from ntp_simulation.algorithms.marzullo import marzullo_evaluate
+        from ntp_simulation.marzullo import marzullo_evaluate
 
         p_s2a, p_s2b, p_s2c = get_free_udp_port(), get_free_udp_port(), get_free_udp_port()
         stop = threading.Event()
