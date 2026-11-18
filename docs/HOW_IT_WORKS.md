@@ -113,6 +113,13 @@ Di sini ada **`dispersion_floor`** ($\epsilon_{\text{floor}}$, default `0.050` d
 - Tanpa $\epsilon_{\text{floor}}$, intervalnya menjadi sangat sempit (`±0.5ms`). Akibatnya, dua server jujur yang hanya berbeda `2ms` karena *quartz drift* tidak akan beririsan dan dianggap tidak sepakat.
 - Dengan tambahan `50ms`, server jujur tetap beririsan membentuk konsensus, sedangkan *falseticker* yang melenceng puluhan detik tetap berada jauh di luar irisan.
 
+> **Catatan untuk simulasi antar-device (LAN / Wi-Fi):**
+> Nilai $\delta_i / 2$ memang otomatis membesar mengikuti latensi jaringan nyata, namun default `0.050` (50ms) bisa terasa terlalu ketat jika dijalankan di beberapa mesin fisik berbeda karena:
+> 1. `VirtualClock` menumpang di atas jam OS masing-masing device (`time.time() + _offset`). Jika jam OS antar-device tidak sinkron atau *jitter* jaringan tinggi, selisih antar-relay jujur bisa melampaui `±50ms`.
+> 2. Jika `--drift` aktif dengan `--interval` default (`4.0s`), *Brownian drift* ($\pm 25\text{ ms/s}$) bisa mengakumulasi selisih hingga `100ms` di antara dua siklus polling.
+>
+> Untuk skenario multi-device, longgarkan batas ini lewat flag CLI tanpa perlu mengubah kode—misalnya `--dispersion-floor 0.150` atau `0.200` (masih jauh di bawah skala *falseticker* puluhan detik), atau perkecil `--interval` menjadi `1.5`–`2.0` detik.
+
 ### Langkah 2: Sweep-Line Algorithm (`marzullo_intersection`)
 Misalkan ada $n$ peer yang merespons. Algoritma mencari jumlah *falseticker* paling sedikit $f$ (dengan syarat mayoritas ketat $n - f > n/2$, atau $f \le \lfloor(n-1)/2\rfloor$) sehingga ada titik offset yang disepakati oleh minimal $n - f$ peer.
 
