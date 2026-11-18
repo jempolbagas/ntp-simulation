@@ -155,10 +155,11 @@ def client_worker(
         with state.lock:
             upstreams = list(state.upstreams)
             mode = state.sync_mode
+            sock_timeout = state.socket_timeout
 
         if upstreams:
             # 1. Concurrent UDP polling across all upstreams with nonce correlation
-            samples_dict = poll_peers_concurrently(upstreams, clock, timeout=1.5)
+            samples_dict = poll_peers_concurrently(upstreams, clock, timeout=sock_timeout)
             with state.lock:
                 state.tx_count += len(upstreams)
                 state.rx_count += sum(

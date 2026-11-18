@@ -1,10 +1,12 @@
 """Low-level socket helpers and local IP detection for NTP Simulation."""
 from __future__ import annotations
 
+import functools
 import socket
 from typing import Optional
 
 
+@functools.lru_cache(maxsize=1)
 def get_local_ip() -> str:
     """Detect LAN IP address of this machine.
 

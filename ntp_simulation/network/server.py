@@ -60,6 +60,9 @@ def run_server(
                 manual_fault = state.falseticker_mode
                 chaos_active = state.chaos_mode
                 default_skew = state.falseticker_skew
+                chaos_prob = state.chaos_probability
+                chaos_min = state.chaos_min_skew
+                chaos_max = state.chaos_max_skew
                 stratum = state.stratum
                 local_ip = state.local_ip
                 port = state.port
@@ -70,9 +73,9 @@ def run_server(
             if manual_fault:
                 is_corrupted = True
                 applied_skew = default_skew
-            elif chaos_active and (random.random() < 0.35):
+            elif chaos_active and (random.random() < chaos_prob):
                 is_corrupted = True
-                applied_skew = random.choice([-1.0, 1.0]) * random.uniform(30.0, 90.0)
+                applied_skew = random.choice([-1.0, 1.0]) * random.uniform(chaos_min, chaos_max)
 
             if is_corrupted:
                 t2 += applied_skew

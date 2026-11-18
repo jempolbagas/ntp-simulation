@@ -57,6 +57,10 @@ class SharedState:
             self.upstreams = list(resolved_config.upstreams)
             self.sync_mode = resolved_config.sync_mode
             self.falseticker_skew = resolved_config.falseticker_skew
+            self.chaos_probability = resolved_config.chaos_probability
+            self.chaos_min_skew = resolved_config.chaos_min_skew
+            self.chaos_max_skew = resolved_config.chaos_max_skew
+            self.socket_timeout = resolved_config.socket_timeout
             self.dispersion_floor = resolved_config.dispersion_floor
         else:
             if isinstance(config_or_stratum, int):
@@ -70,6 +74,10 @@ class SharedState:
             self.bind_host = bind_host
             self.sync_mode = sync_mode
             self.falseticker_skew = falseticker_skew
+            self.chaos_probability = float(kwargs.get("chaos_probability", 0.35))
+            self.chaos_min_skew = float(kwargs.get("chaos_min_skew", 30.0))
+            self.chaos_max_skew = float(kwargs.get("chaos_max_skew", 90.0))
+            self.socket_timeout = float(kwargs.get("socket_timeout", 1.5))
             self.dispersion_floor = kwargs.get("dispersion_floor", 0.050)
 
             parsed_upstreams: List[PeerAddress] = []
@@ -83,8 +91,8 @@ class SharedState:
                     parsed_upstreams.append(PeerAddress(host=str(item[0]), port=int(item[1])))
             self.upstreams = parsed_upstreams
 
-        self.local_ip = get_local_ip()
-        self.hostname = socket.gethostname()
+        self.local_ip = str(kwargs["local_ip"]) if "local_ip" in kwargs else get_local_ip()
+        self.hostname = str(kwargs["hostname"]) if "hostname" in kwargs else socket.gethostname()
 
         # UI Freeze / Pause State [SPACE]
         self.ui_paused: bool = False
