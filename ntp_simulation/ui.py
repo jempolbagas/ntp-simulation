@@ -387,6 +387,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         tx = snap.tx_count
         rx = snap.rx_count
         selected_peer = snap.selected_peer
+        synced_os_offset = snap.synced_os_offset
     else:
         now_os = time.time()
         now_virtual = clock.now()
@@ -401,6 +402,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
             tx = state.tx_count
             rx = state.rx_count
             selected_peer = state.selected_peer
+            synced_os_offset = state.synced_os_offset
 
     # 1. HEADER SECTION
     stratum_badges = {
@@ -443,7 +445,10 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
 
     has_upstream_sync = stratum > 1 and selected_peer is not None and len(history_logs) > 0
     if has_upstream_sync:
-        display_offset = slew_rem if abs(slew_rem) > 0.001 else 0.0
+        if synced_os_offset is not None:
+            display_offset = synced_os_offset - current_offset
+        else:
+            display_offset = slew_rem if abs(slew_rem) > 0.001 else 0.0
     else:
         display_offset = current_offset
 
@@ -487,7 +492,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         offset_text = f"{display_offset:+.6f} s ({display_offset * 1000:+.2f} ms)"
         if has_upstream_sync:
             dev_title = "[bold]Clock Deviation (vs Upstream)[/bold]"
-            dev_subtitle = f"[dim]Sync theta | vs Host OS: {current_offset:+.3f}s[/dim]"
+            dev_subtitle = f"[dim]Last: {history_logs[0].theta_s:+.3f}s | OS: {current_offset:+.3f}s[/dim]"
         else:
             dev_title = "[bold]Clock Deviation[/bold]"
             dev_subtitle = "[dim]Delta (Virtual vs Host)[/dim]"

@@ -189,6 +189,7 @@ def client_worker(
                     mode=mode,
                     before=before_ts,
                     after=after_ts,
+                    os_offset=clock.get_offset(),
                 )
 
         stop_event.wait(interval)
