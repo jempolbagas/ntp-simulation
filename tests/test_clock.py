@@ -32,6 +32,24 @@ class TestVirtualClockBasics:
         assert "." in formatted
         assert formatted.count(":") == 2
 
+    def test_format_ts_reflects_runtime_timezone_change(self, monkeypatch):
+        if not hasattr(time, "tzset"):
+            pytest.skip("time.tzset not available on this platform")
+
+        ts = 1700000000.123  # 2023-11-14 22:13:20.123 UTC
+        try:
+            monkeypatch.setenv("TZ", "UTC")
+            assert VirtualClock.format_ts(ts) == "22:13:20.123"
+
+            monkeypatch.setenv("TZ", "Asia/Jakarta")  # UTC+7 -> 05:13:20.123
+            assert VirtualClock.format_ts(ts) == "05:13:20.123"
+
+            monkeypatch.setenv("TZ", "Asia/Tokyo")  # UTC+9 -> 07:13:20.123
+            assert VirtualClock.format_ts(ts) == "07:13:20.123"
+        finally:
+            monkeypatch.undo()
+            time.tzset()
+
 
 class TestClockStepping:
     def test_step_applies_instantaneous_jump(self):

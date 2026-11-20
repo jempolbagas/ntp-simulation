@@ -14,6 +14,8 @@ import time
 from datetime import datetime
 from typing import Optional, Tuple
 
+_tz_lock = threading.Lock()
+
 
 class VirtualClock:
     """Thread-safe virtual clock simulating quartz drift, step jumps, and slewing."""
@@ -227,7 +229,10 @@ class VirtualClock:
     def format_ts(ts: float) -> str:
         """Formats an epoch timestamp as '%H:%M:%S.%f' truncated to milliseconds."""
         try:
-            return datetime.fromtimestamp(ts).strftime("%H:%M:%S.%f")[:-3]
+            with _tz_lock:
+                if hasattr(time, "tzset"):
+                    time.tzset()
+                return datetime.fromtimestamp(ts).strftime("%H:%M:%S.%f")[:-3]
         except (ValueError, OSError, OverflowError):
             return "00:00:00.000"
 
