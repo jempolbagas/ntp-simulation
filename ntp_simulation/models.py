@@ -271,6 +271,12 @@ class TelemetrySnapshot(BaseModel):
     peer_reports: Dict[str, PeerEvaluation] = Field(
         default_factory=dict, description="Peer evaluation reports"
     )
+    selected_peer: Optional[str] = Field(
+        default=None, description="Currently selected truechimer peer"
+    )
+    synced_os_offset: Optional[float] = Field(
+        default=None, description="Expected VirtualClock OS offset when aligned with upstream"
+    )
     server_logs: List[ServerLogEntry] = Field(
         default_factory=list, description="Recent server log entries"
     )

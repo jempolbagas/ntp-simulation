@@ -386,6 +386,8 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         samples = snap.offset_samples
         tx = snap.tx_count
         rx = snap.rx_count
+        selected_peer = snap.selected_peer
+        synced_os_offset = snap.synced_os_offset
     else:
         now_os = time.time()
         now_virtual = clock.now()
@@ -399,6 +401,8 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
             samples = list(state.offset_samples)
             tx = state.tx_count
             rx = state.rx_count
+            selected_peer = state.selected_peer
+            synced_os_offset = state.synced_os_offset
 
     # 1. HEADER SECTION
     stratum_badges = {
@@ -439,6 +443,15 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         Panel(header_table, border_style=border_color, title="[bold]Network Time Protocol Simulation Node[/bold]")
     )
 
+    has_upstream_sync = stratum > 1 and selected_peer is not None and len(history_logs) > 0
+    if has_upstream_sync:
+        if synced_os_offset is not None:
+            display_offset = synced_os_offset - current_offset
+        else:
+            display_offset = slew_rem if abs(slew_rem) > 0.001 else 0.0
+    else:
+        display_offset = current_offset
+
     # 2. CLOCKS SECTION
     clocks_table = Table.grid(expand=True)
     if is_falseticker:
@@ -475,8 +488,14 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         clocks_table.add_column(justify="center", ratio=1)
         clocks_table.add_column(justify="center", ratio=1)
 
-        offset_color = "bold green" if abs(current_offset) < 0.005 else ("yellow" if abs(current_offset) < 1.0 else "bold red")
-        offset_text = f"{current_offset:+.6f} s ({current_offset * 1000:+.2f} ms)"
+        offset_color = "bold green" if abs(display_offset) < 0.005 else ("yellow" if abs(display_offset) < 1.0 else "bold red")
+        offset_text = f"{display_offset:+.6f} s ({display_offset * 1000:+.2f} ms)"
+        if has_upstream_sync:
+            dev_title = "[bold]Clock Deviation (vs Upstream)[/bold]"
+            dev_subtitle = f"[dim]Last: {history_logs[0].theta_s:+.3f}s | OS: {current_offset:+.3f}s[/dim]"
+        else:
+            dev_title = "[bold]Clock Deviation[/bold]"
+            dev_subtitle = "[dim]Delta (Virtual vs Host)[/dim]"
 
         clocks_table.add_row(
             Panel(
@@ -490,8 +509,8 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
                 border_style=border_color,
             ),
             Panel(
-                Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n[dim]Delta (Virtual vs Host)[/dim]"),
-                title="[bold]Clock Deviation[/bold]",
+                Align.center(f"[{offset_color}]{offset_text}[/{offset_color}]\n{dev_subtitle}"),
+                title=dev_title,
                 border_style=offset_color,
             ),
         )
@@ -508,7 +527,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         spark_text = Text.from_markup(f"[dim]Convergence Trend:[/] [bold green]{spark}[/bold green] (Last {len(samples)} syncs)")
         slew_display_elements.append(spark_text)
 
-    gauge_text = render_offset_gauge(current_offset)
+    gauge_text = render_offset_gauge(current_offset if is_falseticker else display_offset)
     gauge_grid = Table.grid(expand=True)
     gauge_grid.add_column(justify="left", ratio=3)
     gauge_grid.add_column(justify="right", ratio=2)

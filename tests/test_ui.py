@@ -101,3 +101,61 @@ class TestDashboard:
         console.print(build_dashboard(clock, s3))
         assert s3.frozen_snapshot.offset == pytest.approx(1.5)
         assert s3.toggle_ui_pause(clock) is False
+
+    def test_dashboard_uses_upstream_sync_for_stratum_gt_1(self):
+        buf = io.StringIO()
+        console = Console(file=buf, width=120, height=35)
+        clock = VirtualClock(initial_offset=-2.5)
+        s3 = SharedState(NodeConfig(stratum=3, port=5004, upstreams=["127.0.0.1:5002"]))
+        s3.record_sync(peer="127.0.0.1:5002", delay=0.004, theta=12.0, mode="STEP", before=100.0, after=112.0)
+
+        console.print(build_dashboard(clock, s3))
+        rendered = buf.getvalue()
+        assert "Clock Deviation (vs Upstream)" in rendered
+        assert "+0.000000 s" in rendered
+        assert "OS: -2.500s" in rendered
+        assert "LOCKED (< 5ms)" in rendered
+
+    def test_dashboard_tracks_slew_and_falls_back_when_consensus_lost(self):
+        buf = io.StringIO()
+        console = Console(file=buf, width=120, height=35)
+        clock = VirtualClock(initial_offset=-2.5)
+        s3 = SharedState(NodeConfig(stratum=3, port=5004, upstreams=["127.0.0.1:5002"]))
+        clock.start_slew(1.5)
+        s3.record_sync(peer="127.0.0.1:5002", delay=0.004, theta=1.5, mode="SLEW", before=100.0, after=100.0)
+
+        console.print(build_dashboard(clock, s3))
+        rendered = buf.getvalue()
+        assert "+1.49" in rendered or "+1.50" in rendered
+        assert "LOCKED (< 5ms)" not in rendered
+        assert "+30s" in rendered
+
+        s3.update_peer_evaluations({}, chosen_peer=None)
+        buf.seek(0)
+        buf.truncate(0)
+        console.print(build_dashboard(clock, s3))
+        rendered = buf.getvalue()
+        assert "Delta (Virtual vs Host)" in rendered
+        assert "-2." in rendered
+
+    def test_dashboard_shows_live_drift_after_step_sync(self):
+        buf = io.StringIO()
+        console = Console(file=buf, width=120, height=35)
+        clock = VirtualClock(initial_offset=-2.5)
+        s2 = SharedState(NodeConfig(stratum=2, port=5002, upstreams=["127.0.0.1:5001"]))
+        s2.record_sync(
+            peer="127.0.0.1:5001",
+            delay=0.002,
+            theta=0.015,
+            mode="STEP",
+            before=100.0,
+            after=100.015,
+            os_offset=clock.get_offset(),
+        )
+
+        # Simulate clock drifting +80ms between poll cycles
+        clock.step(0.080)
+        console.print(build_dashboard(clock, s2))
+        rendered = buf.getvalue()
+        assert "-0.080000 s (-80.00 ms)" in rendered
+        assert "Last: +0.015s" in rendered

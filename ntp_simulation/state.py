@@ -60,6 +60,7 @@ class SharedState:
         # Telemetry & Multi-Peer State
         self.peer_reports: Dict[str, PeerEvaluation] = {}
         self.selected_peer: Optional[str] = None
+        self.synced_os_offset: Optional[float] = None
 
         # Ring buffers (fixed maximum capacity)
         self.recent_server_logs: Deque[ServerLogEntry] = collections.deque(maxlen=10)
@@ -151,11 +152,14 @@ class SharedState:
         mode: str = "STEP",
         before: float = 0.0,
         after: float = 0.0,
+        os_offset: Optional[float] = None,
     ) -> None:
         """Records clock adjustment event, updating synchronization telemetry and history."""
         with self.lock:
             now = time.time()
             self.selected_peer = peer
+            if os_offset is not None:
+                self.synced_os_offset = float(os_offset) + (0.0 if mode == "STEP" else float(theta))
             self.sync_count += 1
             self.offset_samples.append(float(theta))
 
@@ -201,6 +205,8 @@ class SharedState:
             slew_target=slew_target,
             slew_ratio=slew_ratio,
             peer_reports=dict(self.peer_reports),
+            selected_peer=self.selected_peer,
+            synced_os_offset=self.synced_os_offset,
             server_logs=list(self.recent_server_logs),
             sync_history=list(self.sync_history),
             offset_samples=list(self.offset_samples),
