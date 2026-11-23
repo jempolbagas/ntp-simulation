@@ -74,8 +74,8 @@ class KeyReader:
             try:
                 import msvcrt
 
-                start = time.time()
-                while time.time() - start < timeout:
+                start = time.monotonic()
+                while time.monotonic() - start < timeout:
                     if msvcrt.kbhit():
                         ch = msvcrt.getch()
                         try:
