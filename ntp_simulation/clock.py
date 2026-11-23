@@ -46,9 +46,9 @@ class VirtualClock:
         self._drift_target: float = 0.0
         self._max_drift_target: float = float(max_drift_target)
         self._drift_shift_interval: float = float(drift_shift_interval)
-        self._last_drift_shift: float = time.time()
+        self._last_tick: float = time.monotonic()
+        self._last_drift_shift: float = self._last_tick
 
-        self._last_tick: float = time.time()
         self._lock: threading.Lock = threading.Lock()
 
     @property
@@ -74,11 +74,11 @@ class VirtualClock:
     def now(self) -> float:
         """Returns current virtual time (system time + offset) under lock."""
         with self._lock:
-            now_ts = time.time()
-            elapsed = now_ts - self._last_tick
+            mono_now = time.monotonic()
+            elapsed = mono_now - self._last_tick
             if elapsed > 0.0:
-                self._advance_locked(now_ts, elapsed)
-            return now_ts + self._offset
+                self._advance_locked(mono_now, elapsed)
+            return time.time() + self._offset
 
     def get_offset(self) -> float:
         """Returns current clock offset relative to OS clock in seconds."""
@@ -156,7 +156,7 @@ class VirtualClock:
                 now = float(now_real)
                 elapsed = max(0.0, now - self._last_tick)
             else:
-                now = time.time()
+                now = time.monotonic()
                 elapsed = max(0.0, now - self._last_tick)
 
             self._advance_locked(now, elapsed)
@@ -222,8 +222,12 @@ class VirtualClock:
             self._drift_active = False
             self._drift_rate = 0.0
             self._drift_target = 0.0
-            self._last_tick = time.time()
+            self._last_tick = time.monotonic()
             self._last_drift_shift = self._last_tick
+
+    def close(self) -> None:
+        """No-op shutdown hook matching SystemClock interface."""
+        return None
 
     @staticmethod
     def format_ts(ts: float) -> str:
