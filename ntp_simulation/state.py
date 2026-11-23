@@ -32,6 +32,8 @@ class SharedState:
         self.bind_host = config.bind_host
         self.upstreams = list(config.upstreams)
         self.sync_mode = config.sync_mode
+        self.sync_os_clock = config.sync_os_clock
+        self.step_threshold = config.step_threshold
         self.falseticker_skew = config.falseticker_skew
         self.chaos_probability = config.chaos_probability
         self.chaos_min_skew = config.chaos_min_skew
@@ -98,9 +100,10 @@ class SharedState:
             return self.chaos_mode
 
     def toggle_sync_mode(self) -> str:
-        """Toggles clock synchronization adjustment mode between STEP and SLEW."""
+        """Cycles clock synchronization adjustment mode: STEP -> SLEW -> AUTO -> STEP."""
         with self.lock:
-            self.sync_mode = "SLEW" if self.sync_mode == "STEP" else "STEP"
+            cycle = {"STEP": "SLEW", "SLEW": "AUTO", "AUTO": "STEP"}
+            self.sync_mode = cycle.get(self.sync_mode, "AUTO")
             self.last_action_banner = f"Sync Algorithm switched to: {self.sync_mode} Mode"
             return self.sync_mode
 
@@ -153,20 +156,32 @@ class SharedState:
         before: float = 0.0,
         after: float = 0.0,
         os_offset: Optional[float] = None,
+        configured_mode: Optional[str] = None,
     ) -> None:
         """Records clock adjustment event, updating synchronization telemetry and history."""
         with self.lock:
             now = time.time()
             self.selected_peer = peer
-            if os_offset is not None:
+            if not self.sync_os_clock and os_offset is not None:
                 self.synced_os_offset = float(os_offset) + (0.0 if mode == "STEP" else float(theta))
             self.sync_count += 1
             self.offset_samples.append(float(theta))
 
-            if mode == "STEP":
-                self.last_action_banner = f"[STEP APPLIED] Clock shifted {theta:+.4f}s"
+            effective_configured = configured_mode or mode
+            if effective_configured == "AUTO":
+                if mode == "STEP":
+                    self.last_action_banner = f"[AUTO -> STEP] Clock shifted {theta:+.4f}s"
+                else:
+                    self.last_action_banner = (
+                        f"[AUTO -> SLEW] Adapting clock smoothly toward {theta:+.4f}s"
+                    )
             else:
-                self.last_action_banner = f"[SLEW ACTIVE] Adapting clock smoothly toward {theta:+.4f}s"
+                if mode == "STEP":
+                    self.last_action_banner = f"[STEP APPLIED] Clock shifted {theta:+.4f}s"
+                else:
+                    self.last_action_banner = (
+                        f"[SLEW ACTIVE] Adapting clock smoothly toward {theta:+.4f}s"
+                    )
 
             self.sync_history.appendleft(
                 SyncHistoryEntry(

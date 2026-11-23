@@ -192,7 +192,16 @@ class NodeConfig(BaseModel):
     )
     interval: float = Field(default=4.0, gt=0.1, description="Polling interval in seconds")
     no_ui: bool = Field(default=False, description="Disable Rich TUI dashboard")
-    sync_mode: str = Field(default="STEP", pattern="^(STEP|SLEW)$")
+    sync_mode: str = Field(default="STEP", pattern="^(STEP|SLEW|AUTO)$")
+    sync_os_clock: bool = Field(
+        default=False,
+        description="Discipline host OS clock (Linux/Windows)",
+    )
+    step_threshold: float = Field(
+        default=0.128,
+        gt=0.0,
+        description="AUTO mode step threshold in seconds (RFC 5905)",
+    )
     slew_rate: float = Field(default=0.40, gt=0.0, description="Slew adaptation rate in s/s")
     falseticker_skew: float = Field(
         default=60.0, description="Skew injected in falseticker mode in seconds"
@@ -206,6 +215,17 @@ class NodeConfig(BaseModel):
         ge=0.0,
         description="Minimum dispersion/uncertainty floor in seconds (RFC 5905)",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_auto_mode_for_os_clock(cls, data: Any) -> Any:
+        """Defaults sync_mode to AUTO when sync_os_clock is enabled and mode is omitted."""
+        if isinstance(data, dict) and data.get("sync_os_clock"):
+            if "sync_mode" not in data or data.get("sync_mode") is None:
+                updated = dict(data)
+                updated["sync_mode"] = "AUTO"
+                return updated
+        return data
 
     @field_validator("upstreams", mode="before")
     @classmethod
