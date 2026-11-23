@@ -365,6 +365,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
         chaos_active = state.chaos_mode
         fault_skew = state.falseticker_skew
         sync_mode = state.sync_mode
+        sync_os_clock = state.sync_os_clock
         last_banner = state.last_action_banner
         stratum = state.stratum
         local_ip = state.local_ip
@@ -428,6 +429,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
     else:
         drift_badge = "[dim][DRIFT: OFF][/dim]"
 
+    os_badge = "[bold white on dark_red] [OS CLOCK] [/bold white on dark_red]  " if sync_os_clock else ""
     mode_badge = f"[bold white on dark_cyan] [{sync_mode} MODE] [/bold white on dark_cyan]"
 
     header_table = Table.grid(expand=True)
@@ -437,7 +439,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
     ip_info = f"[bold bright_white]{local_ip}[/bold bright_white]:[bold cyan]{port}[/bold cyan] ({hostname})"
     header_table.add_row(
         Text.from_markup(f"{badge_title}  |  IP: {ip_info}  |  {fault_badge}"),
-        Text.from_markup(f"{mode_badge}  {drift_badge}  [dim](TX:{tx} RX:{rx})[/dim]"),
+        Text.from_markup(f"{os_badge}{mode_badge}  {drift_badge}  [dim](TX:{tx} RX:{rx})[/dim]"),
     )
     layout["header"].update(
         Panel(header_table, border_style=border_color, title="[bold]Network Time Protocol Simulation Node[/bold]")
@@ -497,6 +499,8 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
             dev_title = "[bold]Clock Deviation[/bold]"
             dev_subtitle = "[dim]Delta (Virtual vs Host)[/dim]"
 
+        clock_panel_subtitle = "[dim]Live OS Clock[/dim]" if sync_os_clock else "[dim]Simulated Clock[/dim]"
+        clock_panel_title = "[bold]Disciplined OS Clock[/bold]" if sync_os_clock else "[bold]NTP Virtual Time[/bold]"
         clocks_table.add_row(
             Panel(
                 Align.center(f"[bold cyan]{VirtualClock.format_ts(now_os)}[/bold cyan]\n[dim]OS Hardware Time[/dim]"),
@@ -504,8 +508,8 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
                 border_style="cyan",
             ),
             Panel(
-                Align.center(f"[bold bright_white]{VirtualClock.format_ts(now_virtual)}[/bold bright_white]\n[dim]Simulated Clock[/dim]"),
-                title="[bold]NTP Virtual Time[/bold]",
+                Align.center(f"[bold bright_white]{VirtualClock.format_ts(now_virtual)}[/bold bright_white]\n{clock_panel_subtitle}"),
+                title=clock_panel_title,
                 border_style=border_color,
             ),
             Panel(
@@ -648,7 +652,7 @@ def build_dashboard(clock: VirtualClock, state: SharedState) -> Layout:
                 "[bold white][SPACE][/bold white] Freeze/Pause UI  |  "
                 "[bold bright_yellow][F][/bold bright_yellow] Manual Falseticker  |  "
                 "[bold magenta][C][/bold magenta] Auto Chaos  |  "
-                "[bold cyan][M][/bold cyan] Slew/Step  |  "
+                "[bold cyan][M][/bold cyan] Mode (Auto/Step/Slew)  |  "
                 "[bold green][D][/bold green] Dynamic Drift  |  "
                 "[bold red][Q][/bold red] Quit"
             ),

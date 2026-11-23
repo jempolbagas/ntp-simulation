@@ -8,7 +8,7 @@ import socket
 import sys
 import threading
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from pydantic import ValidationError
 from rich.console import Console
@@ -18,6 +18,7 @@ from ntp_simulation.clock import VirtualClock
 from ntp_simulation.marzullo import marzullo_evaluate
 from ntp_simulation.models import NodeConfig, PeerAddress
 from ntp_simulation.network import poll_peers_concurrently, run_server
+from ntp_simulation.os_clock import OSClockError, SystemClock
 from ntp_simulation.state import SharedState
 from ntp_simulation.ui import KeyReader, build_dashboard
 
@@ -89,9 +90,23 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--sync-mode",
-        choices=["STEP", "SLEW"],
-        default="STEP",
-        help="Initial synchronization algorithm mode (default: STEP)",
+        choices=["AUTO", "STEP", "SLEW"],
+        default=None,
+        help="Synchronization algorithm mode (default: AUTO with --sync-os-clock, STEP otherwise)",
+    )
+    parser.add_argument(
+        "--sync-os-clock",
+        action="store_true",
+        help=(
+            "Discipline the host OS clock on Linux/Windows "
+            "(requires root/CAP_SYS_TIME or Administrator; ignores simulation flags)"
+        ),
+    )
+    parser.add_argument(
+        "--step-threshold",
+        type=float,
+        default=0.128,
+        help="AUTO mode threshold in seconds to STEP instead of SLEW (default: 0.128s)",
     )
     parser.add_argument(
         "--drift",
@@ -129,13 +144,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 
     args = parser.parse_args(argv)
+    if args.sync_mode is None:
+        args.sync_mode = "AUTO" if args.sync_os_clock else "STEP"
     if args.stratum > 1 and not args.upstream:
         parser.error(f"--upstream is required when --stratum is {args.stratum}")
     return args
 
 
 def client_worker(
-    clock: VirtualClock,
+    clock: Union[VirtualClock, SystemClock],
     state: SharedState,
     interval: float,
     stop_event: threading.Event,
@@ -143,7 +160,7 @@ def client_worker(
     """Client worker loop performing concurrent polling, Marzullo evaluation, and clock sync.
 
     Args:
-        clock: Active VirtualClock to synchronize.
+        clock: Active VirtualClock or SystemClock to synchronize.
         state: Shared telemetry state.
         interval: Polling periodicity in seconds.
         stop_event: Shutdown coordination event.
@@ -176,21 +193,31 @@ def client_worker(
                 theta_val = target_eval.theta
                 before_ts = clock.now()
 
-                if mode == "STEP":
-                    clock.step(theta_val)
+                if mode == "AUTO":
+                    effective_mode = "STEP" if abs(theta_val) > state.step_threshold else "SLEW"
                 else:
-                    clock.start_slew(theta_val)
+                    effective_mode = mode
 
-                after_ts = clock.now()
-                state.record_sync(
-                    peer=chosen_peer,
-                    delay=target_eval.delay,
-                    theta=theta_val,
-                    mode=mode,
-                    before=before_ts,
-                    after=after_ts,
-                    os_offset=clock.get_offset(),
-                )
+                try:
+                    if effective_mode == "STEP":
+                        clock.step(theta_val)
+                    else:
+                        clock.start_slew(theta_val)
+                except OSClockError as exc:
+                    with state.lock:
+                        state.last_action_banner = f"[OS CLOCK ERROR] {exc}"
+                else:
+                    after_ts = clock.now()
+                    state.record_sync(
+                        peer=chosen_peer,
+                        delay=target_eval.delay,
+                        theta=theta_val,
+                        mode=effective_mode,
+                        before=before_ts,
+                        after=after_ts,
+                        os_offset=clock.get_offset(),
+                        configured_mode=mode,
+                    )
 
         stop_event.wait(interval)
 
@@ -198,7 +225,7 @@ def client_worker(
 def key_listener_worker(
     key_reader: Optional[KeyReader],
     state: SharedState,
-    clock: VirtualClock,
+    clock: Union[VirtualClock, SystemClock],
     stop_event: threading.Event,
 ) -> None:
     """Listens for keyboard input to handle interactive runtime toggles.
@@ -207,7 +234,7 @@ def key_listener_worker(
         [SPACE]: Freeze/resume UI telemetry rendering.
         [F]: Toggle manual falseticker fault mode (+60s skew).
         [C]: Toggle random chaos glitch mode.
-        [M]: Toggle sync mode (STEP <-> SLEW).
+        [M]: Cycle sync mode (STEP -> SLEW -> AUTO).
         [D]: Toggle Brownian quartz crystal drift.
         [Q]: Graceful shutdown.
     """
@@ -223,7 +250,12 @@ def key_listener_worker(
             state.toggle_ui_pause(clock)
         else:
             key = ch.lower()
-            if key == "f":
+            if key in ("f", "c", "d") and state.sync_os_clock:
+                with state.lock:
+                    state.last_action_banner = (
+                        "Simulation faults/drift are disabled in --sync-os-clock mode"
+                    )
+            elif key == "f":
                 state.toggle_falseticker()
             elif key == "c":
                 state.toggle_chaos()
@@ -258,11 +290,21 @@ def main(argv: Optional[List[str]] = None) -> None:
             interval=args.interval,
             no_ui=args.no_ui,
             sync_mode=args.sync_mode,
+            sync_os_clock=args.sync_os_clock,
+            step_threshold=args.step_threshold,
             dispersion_floor=getattr(args, "dispersion_floor", 0.050),
         )
     except ValidationError as exc:
         print(f"Error: Invalid configuration:\n{exc}", file=sys.stderr)
         sys.exit(2)
+
+    clock: Union[VirtualClock, SystemClock]
+    if config.sync_os_clock:
+        try:
+            clock = SystemClock(validate=True)
+        except OSClockError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     # Early socket bind check for server nodes (Stratum 1 & 2)
     if config.stratum in (1, 2):
@@ -271,27 +313,31 @@ def main(argv: Optional[List[str]] = None) -> None:
             test_sock.bind((config.bind_host, config.port))
             test_sock.close()
         except OSError as exc:
+            if config.sync_os_clock:
+                clock.close()
             print(
                 f"Error: Unable to bind UDP port {config.port} on {config.bind_host}: {exc}",
                 file=sys.stderr,
             )
             sys.exit(1)
 
-    if getattr(args, "initial_offset", None) is not None:
-        initial_offset = float(args.initial_offset)
-    else:
-        initial_offset = (
-            0.0 if args.stratum == 1 else random.choice([-1.0, 1.0]) * random.uniform(5.0, 30.0)
-        )
-    clock = VirtualClock(initial_offset=initial_offset, slew_rate=config.slew_rate)
-    if args.drift:
-        clock.set_drift(True)
+    if not config.sync_os_clock:
+        if getattr(args, "initial_offset", None) is not None:
+            initial_offset = float(args.initial_offset)
+        else:
+            initial_offset = (
+                0.0 if args.stratum == 1 else random.choice([-1.0, 1.0]) * random.uniform(5.0, 30.0)
+            )
+        clock = VirtualClock(initial_offset=initial_offset, slew_rate=config.slew_rate)
+        if args.drift:
+            clock.set_drift(True)
 
     state = SharedState(config)
-    if args.falseticker:
-        state.toggle_falseticker()
-    if args.chaos:
-        state.toggle_chaos()
+    if not config.sync_os_clock:
+        if args.falseticker:
+            state.toggle_falseticker()
+        if args.chaos:
+            state.toggle_chaos()
 
     stop_event = threading.Event()
     threads: List[threading.Thread] = []
@@ -400,6 +446,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             key_reader.restore()
         for t in threads:
             t.join(timeout=0.5)
+        clock.close()
 
 
 if __name__ == "__main__":
